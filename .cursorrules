@@ -1,0 +1,45 @@
+# Development Standards
+
+## Code Quality
+- Production-ready code only
+- No placeholder implementations
+- Complete error handling
+- Type hints in Python, TypeScript strict mode
+- Self-documenting code with minimal comments
+- DRY principle - no code duplication
+
+## Output Rules
+- No markdown files unless explicitly requested
+- No icons or emojis in UI or code
+- No verbose logging or debug statements
+- Concise, direct implementations
+
+## Architecture
+- File-based JSON storage in data folder (database migration later)
+- FastAPI backend on port 8000
+- Next.js frontend on port 3000
+- Clean separation of concerns
+
+## Workflow
+- Complete features fully before moving on
+- Test edge cases
+- Handle errors gracefully
+- Never avoid difficult tasks
+
+## Styling
+- Modern, light, minimal UI
+- No decorative elements
+- Clean typography
+- Subtle borders and shadows
+- Gray color palette with blue accents
+
+## File Structure
+- backend/data/ for JSON storage
+- backend/output/reports/ for PDFs
+- frontend/app/ for pages
+- frontend/components/ for reusable components
+
+## Commands
+- npm run dev from root runs both servers
+- Backend: python main.py
+- Frontend: npm run dev

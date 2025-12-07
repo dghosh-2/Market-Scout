@@ -1,0 +1,42 @@
+[
+  {
+    "id": "feaf4bbb-fd15-4e21-9945-6c27c09140f1",
+    "query_id": "f4b76352-a01e-459b-b03c-59a97339103d",
+    "company": "Apple Inc. (AAPL)",
+    "report_path": "/reports/AAPL_20251207_021808_feaf4bbb-fd15-4e21-9945-6c27c09140f1.pdf",
+    "version": 1,
+    "created_at": "2025-12-07T02:18:08.655937"
+  },
+  {
+    "id": "fdb31ab4-6eff-4227-854f-bdf756f1e40f",
+    "query_id": "87d027ac-28e8-448d-b773-e06e85459152",
+    "company": "Taiwan Semiconductor Manufacturing Company Limited (TSM)",
+    "report_path": "/reports/TSM_20251207_021823_fdb31ab4-6eff-4227-854f-bdf756f1e40f.pdf",
+    "version": 1,
+    "created_at": "2025-12-07T02:18:23.410969"
+  },
+  {
+    "id": "25237ff3-78fb-43ba-9238-cdc231369fbc",
+    "query_id": "54b2c9eb-b292-427f-b7f6-eac0854c202f",
+    "company": "Tesla, Inc. (TSLA)",
+    "report_path": "/reports/TSLA_20251207_021841_25237ff3-78fb-43ba-9238-cdc231369fbc.pdf",
+    "version": 1,
+    "created_at": "2025-12-07T02:18:41.057649"
+  },
+  {
+    "id": "012f9b29-0615-4cf1-9189-28243fc4bc20",
+    "query_id": "5f208563-ea76-46b1-b8ae-ee3258a204fa",
+    "company": "Tesla, Inc. (TSLA)",
+    "report_path": "/reports/TSLA_20251207_021859_012f9b29-0615-4cf1-9189-28243fc4bc20.pdf",
+    "version": 2,
+    "created_at": "2025-12-07T02:18:59.446449"
+  },
+  {
+    "id": "4acd9e50-eb3e-464c-9a98-a60358772663",
+    "query_id": "b2083490-7a27-4d28-a9f0-afd6c38a3bf7",
+    "company": "Apple Inc. (AAPL)",
+    "report_path": "/reports/AAPL_20251207_022000_4acd9e50-eb3e-464c-9a98-a60358772663.pdf",
+    "version": 2,
+    "created_at": "2025-12-07T02:20:00.053946"
+  }
+]
