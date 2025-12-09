@@ -107,19 +107,52 @@ def get_news(ticker: str) -> Dict[str, Any]:
     """Get recent news and sentiment indicators"""
     try:
         stock = yf.Ticker(ticker)
-        news = stock.news or []
+        news_data = stock.news or []
         
         articles = []
-        for item in news[:10]:
-            articles.append({
-                "title": item.get("title", ""),
-                "publisher": item.get("publisher", ""),
-                "link": item.get("link", ""),
-                "published": datetime.fromtimestamp(item.get("providerPublishTime", 0)).strftime("%Y-%m-%d %H:%M") if item.get("providerPublishTime") else "",
-            })
+        for item in news_data[:10]:
+            # Handle both old and new yfinance news formats
+            title = ""
+            publisher = ""
+            link = ""
+            published = ""
+            
+            # New format: news is a list of dicts with 'content' key
+            if isinstance(item, dict):
+                # Try new format first (content nested structure)
+                if "content" in item:
+                    content = item.get("content", {})
+                    title = content.get("title", "") or item.get("title", "")
+                    publisher = content.get("provider", {}).get("displayName", "") if isinstance(content.get("provider"), dict) else ""
+                    link = content.get("canonicalUrl", {}).get("url", "") if isinstance(content.get("canonicalUrl"), dict) else ""
+                    pub_time = content.get("pubDate", "")
+                    if pub_time:
+                        try:
+                            published = pub_time[:16].replace("T", " ")
+                        except:
+                            published = ""
+                else:
+                    # Old format
+                    title = item.get("title", "")
+                    publisher = item.get("publisher", "")
+                    link = item.get("link", "")
+                    pub_time = item.get("providerPublishTime", 0)
+                    if pub_time and isinstance(pub_time, (int, float)):
+                        try:
+                            published = datetime.fromtimestamp(pub_time).strftime("%Y-%m-%d %H:%M")
+                        except:
+                            published = ""
+            
+            if title:
+                articles.append({
+                    "title": title,
+                    "publisher": publisher,
+                    "link": link,
+                    "published": published,
+                })
         
-        positive_words = ["surge", "gain", "profit", "growth", "beat", "upgrade", "bullish", "rally", "success", "soar", "jump", "rise"]
-        negative_words = ["fall", "loss", "decline", "downgrade", "bearish", "risk", "concern", "lawsuit", "investigation", "drop", "plunge", "crash"]
+        positive_words = ["surge", "gain", "profit", "growth", "beat", "upgrade", "bullish", "rally", "success", "soar", "jump", "rise", "strong", "record", "high", "boost"]
+        negative_words = ["fall", "loss", "decline", "downgrade", "bearish", "risk", "concern", "lawsuit", "investigation", "drop", "plunge", "crash", "weak", "miss", "cut", "low", "warning"]
         
         pos_count = neg_count = 0
         for article in articles:
@@ -142,7 +175,7 @@ def get_news(ticker: str) -> Dict[str, Any]:
             "negative_signals": neg_count,
         }
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e), "articles": [], "article_count": 0}
 
 
 def get_price_history(ticker: str, period: str = "1y") -> Dict[str, Any]:
