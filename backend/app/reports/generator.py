@@ -154,6 +154,7 @@ def generate_report(data: Dict[str, Any], report_id: str) -> str:
     analysis = data.get("analysis", {})
     raw_data = data.get("raw_data", {})
     price_data = data.get("price_data", {})
+    portfolio_context = data.get("portfolio_context", {})
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{ticker}_{timestamp}_{report_id}.pdf"
@@ -330,6 +331,40 @@ def generate_report(data: Dict[str, Any], report_id: str) -> str:
             f"(${price_data.get('start_price', 0):.2f} to ${price_data.get('end_price', 0):.2f})",
             styles['Body_Text']
         ))
+    
+    # Portfolio Fit Analysis
+    portfolio_fit = analysis.get("portfolio_fit", "")
+    if portfolio_fit:
+        story.append(Paragraph("Portfolio Fit Analysis", styles['Section_Header']))
+        story.append(Paragraph(portfolio_fit, styles['Body_Text']))
+        
+        # Add portfolio summary table if we have portfolio context
+        if portfolio_context and portfolio_context.get("holdings"):
+            holdings = portfolio_context["holdings"]
+            if holdings:
+                story.append(Spacer(1, 0.1*inch))
+                story.append(Paragraph("Current Portfolio Holdings:", styles['Body_Text']))
+                
+                portfolio_data = [["Ticker", "Weight", "Sector"]]
+                for h in holdings[:8]:
+                    portfolio_data.append([
+                        h.get("ticker", ""),
+                        f"{h.get('weight', 0):.1f}%",
+                        h.get("sector", "Unknown")[:20]
+                    ])
+                
+                portfolio_table = Table(portfolio_data, colWidths=[1.5*inch, 1.5*inch, 3*inch])
+                portfolio_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), SECONDARY),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), HexColor("#ffffff")),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 9),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                    ('TOPPADDING', (0, 0), (-1, -1), 6),
+                    ('GRID', (0, 0), (-1, -1), 0.5, BORDER),
+                ]))
+                story.append(portfolio_table)
     
     # Disclaimer
     story.append(Spacer(1, 0.5*inch))

@@ -3,7 +3,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.routers import research_router, papers_router, feedback_router
+from app.routers import research_router, papers_router, feedback_router, portfolio_router
 
 app = FastAPI(title="Stock Research API", version="1.0.0")
 
@@ -31,6 +31,7 @@ app.mount("/reports", StaticFiles(directory=REPORTS_DIR), name="reports")
 app.include_router(research_router.router, prefix="/api", tags=["research"])
 app.include_router(papers_router.router, prefix="/api", tags=["papers"])
 app.include_router(feedback_router.router, prefix="/api", tags=["feedback"])
+app.include_router(portfolio_router.router, prefix="/api", tags=["portfolio"])
 
 
 @app.get("/")

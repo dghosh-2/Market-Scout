@@ -2,7 +2,7 @@ import json
 from typing import Dict, Any, List
 from openai import OpenAI
 from app.config.settings import get_settings
-from app.agents.tools import TOOL_DEFINITIONS, execute_tool
+from app.agents.tools import TOOL_DEFINITIONS, execute_tool, get_portfolio_context
 
 settings = get_settings()
 client = OpenAI(api_key=settings.openai_api_key)
@@ -22,8 +22,12 @@ def run_master_agent(ticker: str, company_name: str, user_query: str, custom_req
     if custom_request:
         gathered_data["other"] = execute_tool("get_other", {"ticker": ticker, "custom_request": custom_request})
     
+    # Get portfolio context
+    portfolio_context = get_portfolio_context()
+    gathered_data["portfolio"] = portfolio_context
+    
     # Generate analysis
-    analysis = generate_analysis(ticker, company_name, user_query, custom_request, gathered_data)
+    analysis = generate_analysis(ticker, company_name, user_query, custom_request, gathered_data, portfolio_context)
     
     return {
         "ticker": ticker,
@@ -31,14 +35,36 @@ def run_master_agent(ticker: str, company_name: str, user_query: str, custom_req
         "user_query": user_query,
         "custom_request": custom_request,
         "raw_data": gathered_data,
-        "analysis": analysis
+        "analysis": analysis,
+        "portfolio_context": portfolio_context
     }
 
 
-def generate_analysis(ticker: str, company_name: str, user_query: str, custom_request: str, data: Dict[str, Any]) -> Dict[str, str]:
+def generate_analysis(ticker: str, company_name: str, user_query: str, custom_request: str, data: Dict[str, Any], portfolio_context: Dict[str, Any] = None) -> Dict[str, str]:
     """Generate written analysis sections from gathered data"""
     
     data_summary = json.dumps(data, indent=2, default=str)[:12000]
+    
+    # Build portfolio section prompt if portfolio exists
+    portfolio_prompt = ""
+    if portfolio_context and portfolio_context.get("holdings"):
+        portfolio_summary = json.dumps(portfolio_context, indent=2, default=str)[:3000]
+        portfolio_prompt = f"""
+
+PORTFOLIO_FIT:
+The user has an existing portfolio. Analyze how {company_name} ({ticker}) would fit into their current holdings:
+{portfolio_summary}
+
+Write 2-3 paragraphs analyzing:
+1. Sector diversification - does this stock add new sector exposure or increase concentration?
+2. Correlation and risk - how might this stock's volatility interact with existing holdings?
+3. Portfolio balance - considering the user's current allocations, would adding this stock improve or worsen their portfolio balance?
+4. Specific recommendation on position sizing if adding to portfolio."""
+    else:
+        portfolio_prompt = """
+
+PORTFOLIO_FIT:
+The user does not have any existing portfolio holdings tracked. Write 1 paragraph suggesting that they can add their holdings in the Portfolio tab to receive personalized portfolio fit analysis in future reports."""
     
     analysis_prompt = f"""You are a senior investment analyst writing a research report for {company_name} ({ticker}).
 
@@ -66,6 +92,7 @@ Write 2-3 paragraphs about key investment risks including market risks, financia
 
 NEWS_ANALYSIS:
 Write 1-2 paragraphs about recent news, market sentiment, and potential upcoming catalysts.
+{portfolio_prompt}
 
 Format your response EXACTLY like this (with section headers in caps followed by colon):
 
@@ -82,6 +109,9 @@ RISK_ASSESSMENT:
 [your paragraphs here]
 
 NEWS_ANALYSIS:
+[your paragraphs here]
+
+PORTFOLIO_FIT:
 [your paragraphs here]"""
 
     response = client.chat.completions.create(
@@ -99,7 +129,8 @@ NEWS_ANALYSIS:
         "company_overview": "",
         "financial_analysis": "",
         "risk_assessment": "",
-        "news_analysis": ""
+        "news_analysis": "",
+        "portfolio_fit": ""
     }
     
     current_section = None
@@ -131,6 +162,11 @@ NEWS_ANALYSIS:
             if current_section:
                 sections[current_section] = '\n'.join(current_content).strip()
             current_section = "news_analysis"
+            current_content = [line.split(':', 1)[1].strip()] if ':' in line else []
+        elif line_upper.startswith('PORTFOLIO_FIT:') or line_upper.startswith('PORTFOLIO FIT:'):
+            if current_section:
+                sections[current_section] = '\n'.join(current_content).strip()
+            current_section = "portfolio_fit"
             current_content = [line.split(':', 1)[1].strip()] if ':' in line else []
         elif current_section:
             current_content.append(line)

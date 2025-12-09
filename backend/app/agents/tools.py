@@ -1,4 +1,6 @@
 import yfinance as yf
+import os
+import json
 from typing import Dict, Any, List
 from datetime import datetime, timedelta
 
@@ -277,6 +279,76 @@ TOOL_DEFINITIONS = [
 ]
 
 
+def get_portfolio_context() -> Dict[str, Any]:
+    """Get current portfolio holdings with enriched data for analysis"""
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    DATA_DIR = os.path.join(BASE_DIR, "data")
+    PORTFOLIO_FILE = os.path.join(DATA_DIR, "portfolio.json")
+    
+    if not os.path.exists(PORTFOLIO_FILE):
+        return {"holdings": [], "total_value": 0, "sectors": {}}
+    
+    try:
+        with open(PORTFOLIO_FILE, "r") as f:
+            holdings = json.load(f)
+    except:
+        return {"holdings": [], "total_value": 0, "sectors": {}}
+    
+    if not holdings:
+        return {"holdings": [], "total_value": 0, "sectors": {}}
+    
+    enriched = []
+    total_value = 0
+    sectors = {}
+    
+    for h in holdings:
+        try:
+            financials = get_financials(h["ticker"])
+            current_price = financials.get("current_price", 0) or 0
+            value = current_price * h["shares"]
+            total_value += value
+            
+            sector = financials.get("sector", "Unknown")
+            if sector not in sectors:
+                sectors[sector] = {"value": 0, "tickers": []}
+            sectors[sector]["value"] += value
+            sectors[sector]["tickers"].append(h["ticker"])
+            
+            enriched.append({
+                "ticker": h["ticker"],
+                "shares": h["shares"],
+                "company_name": h.get("company_name", h["ticker"]),
+                "current_price": current_price,
+                "value": value,
+                "sector": sector,
+                "pe_ratio": financials.get("pe_ratio"),
+                "dividend_yield": financials.get("dividend_yield"),
+                "beta": financials.get("beta"),
+            })
+        except:
+            enriched.append({
+                "ticker": h["ticker"],
+                "shares": h["shares"],
+                "company_name": h.get("company_name", h["ticker"]),
+                "current_price": 0,
+                "value": 0,
+                "sector": "Unknown"
+            })
+    
+    for h in enriched:
+        h["weight"] = (h["value"] / total_value * 100) if total_value > 0 else 0
+    
+    for sector in sectors:
+        sectors[sector]["weight"] = (sectors[sector]["value"] / total_value * 100) if total_value > 0 else 0
+    
+    return {
+        "holdings": enriched,
+        "total_value": total_value,
+        "total_holdings": len(enriched),
+        "sectors": sectors
+    }
+
+
 def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a tool by name"""
     tools = {
@@ -286,6 +358,7 @@ def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         "get_news": get_news,
         "get_price_history": get_price_history,
         "get_other": get_other,
+        "get_portfolio_context": get_portfolio_context,
     }
     
     if tool_name not in tools:
