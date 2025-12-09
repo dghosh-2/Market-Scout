@@ -121,5 +121,54 @@ export const feedbackApi = {
   },
 }
 
+export interface Holding {
+  id: string
+  ticker: string
+  shares: number
+  company_name: string
+  current_price?: number
+  value?: number
+  weight?: number
+  sector?: string
+  created_at: string
+}
+
+export interface PortfolioSummary {
+  holdings: Holding[]
+  total_value: number
+  total_holdings: number
+}
+
+export const portfolioApi = {
+  getPortfolio: async (): Promise<{ holdings: Holding[], total_holdings: number }> => {
+    const response = await api.get('/portfolio')
+    return response.data
+  },
+
+  getPortfolioSummary: async (): Promise<PortfolioSummary> => {
+    const response = await api.get('/portfolio/summary')
+    return response.data
+  },
+
+  addHolding: async (ticker: string, shares: number, companyName?: string) => {
+    const response = await api.post('/portfolio', {
+      ticker,
+      shares,
+      company_name: companyName
+    })
+    return response.data
+  },
+
+  updateHolding: async (ticker: string, shares: number) => {
+    const response = await api.put(`/portfolio/${ticker}`, { shares })
+    return response.data
+  },
+
+  deleteHolding: async (ticker: string) => {
+    const response = await api.delete(`/portfolio/${ticker}`)
+    return response.data
+  },
+}
+
 export default api
 
