@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.lib.colors import HexColor
@@ -24,6 +24,7 @@ BUY_COLOR = HexColor("#16a34a")
 SELL_COLOR = HexColor("#dc2626")
 HOLD_COLOR = HexColor("#ca8a04")
 BORDER = HexColor("#e5e5e5")
+REFLECTION_BG = HexColor("#f8f9fa")
 
 
 def get_styles():
@@ -111,6 +112,36 @@ def get_styles():
         spaceBefore=20,
         alignment=TA_CENTER,
         fontName='Helvetica-Oblique'
+    ))
+    
+    styles.add(ParagraphStyle(
+        'News_Headline',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor=TEXT_DARK,
+        spaceAfter=2,
+        fontName='Helvetica-Bold',
+        leading=12
+    ))
+    
+    styles.add(ParagraphStyle(
+        'News_Reflection',
+        parent=styles['Normal'],
+        fontSize=9,
+        textColor=TEXT_LIGHT,
+        spaceAfter=10,
+        fontName='Helvetica-Oblique',
+        leading=12,
+        leftIndent=10
+    ))
+    
+    styles.add(ParagraphStyle(
+        'News_Publisher',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=TEXT_LIGHT,
+        spaceAfter=4,
+        fontName='Helvetica'
     ))
     
     return styles
@@ -306,20 +337,45 @@ def generate_report(data: Dict[str, Any], report_id: str) -> str:
             story.append(Spacer(1, 0.1*inch))
             story.append(risk_table)
     
-    # News Analysis
+    # News Analysis with Reflections
     news_analysis = analysis.get("news_analysis", "")
     if news_analysis:
         story.append(Paragraph("News and Market Sentiment", styles['Section_Header']))
         story.append(Paragraph(news_analysis, styles['Body_Text']))
         
-        news = raw_data.get("news", {})
-        if news and news.get("articles"):
+        # Display news with reflections
+        news_reflections = analysis.get("news_reflections", [])
+        if news_reflections:
+            story.append(Spacer(1, 0.15*inch))
+            story.append(Paragraph("Recent Headlines & Analysis:", styles['Body_Text']))
             story.append(Spacer(1, 0.1*inch))
-            story.append(Paragraph("Recent Headlines:", styles['Body_Text']))
-            for article in news["articles"][:5]:
+            
+            for i, article in enumerate(news_reflections[:5]):
                 title = article.get("title", "")
                 publisher = article.get("publisher", "")
-                story.append(Paragraph(f"- {title} ({publisher})", styles['Body_Text']))
+                published = article.get("published", "")
+                reflection = article.get("reflection", "")
+                
+                if title:
+                    # Headline
+                    pub_info = f" - {publisher}" if publisher else ""
+                    date_info = f" ({published})" if published else ""
+                    story.append(Paragraph(f"{i+1}. {title}{pub_info}{date_info}", styles['News_Headline']))
+                    
+                    # Reflection/Impact analysis
+                    if reflection:
+                        story.append(Paragraph(f"Impact: {reflection}", styles['News_Reflection']))
+        else:
+            # Fallback to raw news if no reflections
+            news = raw_data.get("news", {})
+            if news and news.get("articles"):
+                story.append(Spacer(1, 0.1*inch))
+                story.append(Paragraph("Recent Headlines:", styles['Body_Text']))
+                for article in news["articles"][:5]:
+                    title = article.get("title", "")
+                    publisher = article.get("publisher", "")
+                    if title:
+                        story.append(Paragraph(f"- {title} ({publisher})", styles['Body_Text']))
     
     # Price Performance
     if price_data and not price_data.get("error"):
@@ -331,6 +387,14 @@ def generate_report(data: Dict[str, Any], report_id: str) -> str:
             f"(${price_data.get('start_price', 0):.2f} to ${price_data.get('end_price', 0):.2f})",
             styles['Body_Text']
         ))
+    
+    # Custom Section (if applicable) - BEFORE Portfolio Fit
+    custom_section = analysis.get("custom_section", "")
+    custom_section_title = analysis.get("custom_section_title", "")
+    if custom_section and custom_section.strip():
+        section_title = custom_section_title if custom_section_title else "Additional Analysis"
+        story.append(Paragraph(section_title, styles['Section_Header']))
+        story.append(Paragraph(custom_section, styles['Body_Text']))
     
     # Portfolio Fit Analysis
     portfolio_fit = analysis.get("portfolio_fit", "")
