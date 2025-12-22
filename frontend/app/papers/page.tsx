@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import NavBar from '@/components/NavBar';
+import NavBar from '../../components/NavBar';
 import Link from 'next/link';
 
 const API_BASE = 'http://localhost:8000/api';

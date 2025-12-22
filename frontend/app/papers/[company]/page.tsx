@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import NavBar from '@/components/NavBar';
+import NavBar from '../../../components/NavBar';
 import Link from 'next/link';
 
 const API_BASE = 'http://localhost:8000/api';

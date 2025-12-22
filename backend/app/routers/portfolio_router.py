@@ -150,3 +150,4 @@ async def get_portfolio_summary():
         "total_holdings": len(enriched)
     }
 
+
