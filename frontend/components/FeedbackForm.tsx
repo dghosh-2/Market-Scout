@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { feedbackApi } from '@/lib/api'
+import { feedbackApi } from '../lib/api'
 
 interface FeedbackFormProps {
   reportId: number

@@ -1,5 +1,5 @@
 import './globals.css';
-import { QueryProvider } from '@/components/QueryProvider';
+import { QueryProvider } from '../components/QueryProvider';
 
 export const metadata = {
   title: 'StockResearch - AI-Powered Stock Analysis',

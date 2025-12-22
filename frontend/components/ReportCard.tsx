@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { formatDateTime } from '@/lib/helpers'
+import { formatDateTime } from '../lib/helpers'
 import FeedbackForm from './FeedbackForm'
 
 interface Report {
