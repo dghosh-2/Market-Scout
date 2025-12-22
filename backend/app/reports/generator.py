@@ -9,9 +9,17 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 
 
+# Detect if running in serverless environment (Vercel)
+IS_SERVERLESS = os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+
 # Get the absolute path to the reports directory
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-REPORTS_DIR = os.path.join(BASE_DIR, "output", "reports")
+if IS_SERVERLESS:
+    # Use /tmp for serverless environments (only writable directory)
+    REPORTS_DIR = "/tmp/reports"
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    REPORTS_DIR = os.path.join(BASE_DIR, "output", "reports")
+
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
 # Colors

@@ -1,0 +1,11 @@
+fastapi
+python-dotenv
+pydantic
+pydantic-settings
+openai
+yfinance
+beautifulsoup4
+requests
+python-multipart
+reportlab
+

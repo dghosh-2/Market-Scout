@@ -4,9 +4,17 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 import uuid
 
+# Detect if running in serverless environment (Vercel)
+IS_SERVERLESS = os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+
 # Get the absolute path to the data directory
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+if IS_SERVERLESS:
+    # Use /tmp for serverless environments (only writable directory)
+    DATA_DIR = "/tmp/data"
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    DATA_DIR = os.path.join(BASE_DIR, "data")
+
 QUERIES_FILE = os.path.join(DATA_DIR, "queries.json")
 REPORTS_FILE = os.path.join(DATA_DIR, "reports.json")
 REPORT_DATA_FILE = os.path.join(DATA_DIR, "report_data.json")
