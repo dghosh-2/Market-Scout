@@ -1,8 +1,11 @@
 import axios from 'axios'
 
+// Use environment variable for API URL, fallback to /api for local dev
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api'
+
 // Create axios instance with base URL
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
