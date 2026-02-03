@@ -5,7 +5,14 @@ import { useParams, useSearchParams } from 'next/navigation';
 import NavBar from '../../../components/NavBar';
 import Link from 'next/link';
 
-const API_BASE = 'http://localhost:8000/api';
+// Production: Render backend, Development: local proxy
+const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+  ? 'https://market-scout-emg1.onrender.com/api'
+  : '/api';
+
+const BACKEND_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+  ? 'https://market-scout-emg1.onrender.com'
+  : 'http://localhost:8000';
 
 interface Report {
   id: string;
@@ -159,7 +166,7 @@ export default function CompanyPapersPage() {
                     <p className="text-sm text-gray-500">{formatDate(report.created_at)}</p>
                   </div>
                   <a
-                    href={`http://localhost:8000${report.report_path}`}
+                    href={`${BACKEND_BASE}${report.report_path}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="px-6 py-2.5 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors"

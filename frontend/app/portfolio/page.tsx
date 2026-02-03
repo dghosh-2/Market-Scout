@@ -3,7 +3,10 @@
 import { useState, useEffect } from 'react';
 import NavBar from '../../components/NavBar';
 
-const API_BASE = 'http://localhost:8000/api';
+// Production: Render backend, Development: local proxy
+const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+  ? 'https://market-scout-emg1.onrender.com/api'
+  : '/api';
 
 interface Holding {
   id: string;

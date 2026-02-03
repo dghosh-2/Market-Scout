@@ -4,7 +4,14 @@ import { useState, useEffect } from 'react';
 import NavBar from '../../components/NavBar';
 import Link from 'next/link';
 
-const API_BASE = 'http://localhost:8000/api';
+// Production: Render backend, Development: local proxy
+const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+  ? 'https://market-scout-emg1.onrender.com/api'
+  : '/api';
+
+const BACKEND_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+  ? 'https://market-scout-emg1.onrender.com'
+  : 'http://localhost:8000';
 
 interface Report {
   id: string;
@@ -150,7 +157,7 @@ export default function PapersPage() {
                           Details
                         </Link>
                         <a
-                          href={`http://localhost:8000${report.report_path}`}
+                          href={`${BACKEND_BASE}${report.report_path}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors"

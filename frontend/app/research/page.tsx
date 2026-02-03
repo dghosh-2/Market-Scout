@@ -3,7 +3,14 @@
 import { useState, useEffect, useRef } from 'react';
 import NavBar from '../../components/NavBar';
 
-const API_BASE = 'http://localhost:8000/api';
+// Production: Render backend, Development: local proxy
+const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+  ? 'https://market-scout-emg1.onrender.com/api'
+  : '/api';
+
+const BACKEND_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+  ? 'https://market-scout-emg1.onrender.com'
+  : 'http://localhost:8000';
 
 interface PricePoint {
   date: string;
@@ -495,7 +502,7 @@ export default function ResearchPage() {
                 </div>
               </div>
               <a
-                href={`http://localhost:8000${reportPath}`}
+                href={`${BACKEND_BASE}${reportPath}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-6 py-3 bg-blue-600 text-white rounded-xl font-medium 
