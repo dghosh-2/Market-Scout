@@ -1,7 +1,12 @@
 import axios from 'axios'
 
-// Use environment variable for API URL, fallback to /api for local dev
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api'
+// Use environment variable for API URL, fallback to local dev
+// Production: Render backend at https://market-scout.onrender.com/api
+// Development: local FastAPI at http://localhost:8000/api
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 
+  (typeof window !== 'undefined' && window.location.hostname !== 'localhost' 
+    ? 'https://market-scout.onrender.com/api' 
+    : '/api')
 
 // Create axios instance with base URL
 const api = axios.create({
