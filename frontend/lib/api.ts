@@ -1,19 +1,25 @@
 import axios from 'axios'
 
-// Use environment variable for API URL, fallback to local dev
-// Production: Render backend at https://market-scout-emg1.onrender.com/api
-// Development: local FastAPI at http://localhost:8000/api
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 
-  (typeof window !== 'undefined' && window.location.hostname !== 'localhost' 
-    ? 'https://market-scout-emg1.onrender.com/api' 
-    : '/api')
+// Production API URL
+const PRODUCTION_API_URL = 'https://market-scout-emg1.onrender.com/api'
 
-// Create axios instance with base URL
+// Create axios instance
 const api = axios.create({
-  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
+})
+
+// Add request interceptor to set baseURL dynamically
+api.interceptors.request.use((config) => {
+  // In browser, check hostname to determine environment
+  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
+    config.baseURL = PRODUCTION_API_URL
+  } else {
+    // Development: use local proxy
+    config.baseURL = '/api'
+  }
+  return config
 })
 
 // Types
