@@ -3,15 +3,7 @@
 import { useState, useEffect } from 'react';
 import NavBar from '../../components/NavBar';
 import Link from 'next/link';
-
-// Production: Render backend, Development: local proxy
-const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-  ? 'https://market-scout-emg1.onrender.com/api'
-  : '/api';
-
-const BACKEND_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-  ? 'https://market-scout-emg1.onrender.com'
-  : 'http://localhost:8000';
+import { getApiBase, getBackendOrigin } from '../../lib/env';
 
 interface Report {
   id: string;
@@ -32,8 +24,11 @@ export default function PapersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const API_BASE = getApiBase();
+  const BACKEND_BASE = getBackendOrigin();
+
   useEffect(() => {
-    fetchPapers();
+    void fetchPapers();
   }, []);
 
   const fetchPapers = async () => {
@@ -55,8 +50,6 @@ export default function PapersPage() {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
     });
   };
 
@@ -65,106 +58,66 @@ export default function PapersPage() {
     return match ? match[1] : company.slice(0, 4).toUpperCase();
   };
 
-  const getLogoUrl = (company: string) => {
-    const ticker = extractTicker(company);
-    const domains: Record<string, string> = {
-      'AAPL': 'apple.com',
-      'MSFT': 'microsoft.com',
-      'GOOGL': 'google.com',
-      'AMZN': 'amazon.com',
-      'META': 'meta.com',
-      'TSLA': 'tesla.com',
-      'NVDA': 'nvidia.com',
-      'TSM': 'tsmc.com',
-    };
-    const domain = domains[ticker] || `${ticker.toLowerCase()}.com`;
-    return `https://logo.clearbit.com/${domain}`;
-  };
-
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-black text-white">
       <NavBar />
-      
-      <main className="max-w-6xl mx-auto px-6 py-12">
-        <div className="mb-10">
-          <h1 className="text-3xl font-semibold text-gray-900 mb-2">My Papers</h1>
-          <p className="text-gray-600">View and download your research reports</p>
-        </div>
 
-        {loading && (
-          <div className="flex items-center justify-center py-20">
-            <div className="w-8 h-8 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin" />
-          </div>
-        )}
+      <main className="max-w-4xl mx-auto px-6 py-14">
+        <p className="text-[10px] tracking-[0.35em] uppercase text-white/45 mb-3">Archive</p>
+        <h1 className="text-2xl font-extralight tracking-[0.12em] uppercase mb-4">Papers</h1>
+        <p className="text-sm text-white/40 font-light mb-10">Prior runs, by issuer.</p>
+
+        {loading && <p className="text-white/40 text-sm font-light py-16">Loading…</p>}
 
         {error && (
-          <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-red-700">{error}</p>
-          </div>
+          <div className="border border-white/15 px-4 py-3 text-sm text-white/70 mb-6 rounded-sm">{error}</div>
         )}
 
         {!loading && !error && groups.length === 0 && (
-          <div className="text-center py-20">
-            <p className="text-gray-500 mb-4">No research reports yet</p>
+          <div className="border border-white/10 rounded-sm py-16 text-center">
+            <p className="text-white/45 text-sm mb-6">Nothing yet.</p>
             <Link
               href="/research"
-              className="inline-block px-6 py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors"
+              className="text-[10px] uppercase tracking-[0.25em] text-white border border-white/25 px-5 py-2 rounded-sm inline-block hover:bg-white/5"
             >
-              Generate Your First Report
+              Run research
             </Link>
           </div>
         )}
 
         {!loading && groups.length > 0 && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             {groups.map((group) => (
-              <div key={group.company} className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <img
-                      src={getLogoUrl(group.company)}
-                      alt={group.company}
-                      className="w-12 h-12 rounded-lg object-contain bg-white border border-gray-100"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = 'none';
-                      }}
-                    />
-                    <div>
-                      <h2 className="text-lg font-semibold text-gray-900">{group.company}</h2>
-                      <p className="text-sm text-gray-500">{group.report_count} report{group.report_count !== 1 ? 's' : ''}</p>
-                    </div>
+              <div key={group.company} className="border border-white/10 rounded-sm overflow-hidden">
+                <div className="px-5 py-4 flex items-center justify-between gap-4 border-b border-white/10">
+                  <div>
+                    <h2 className="text-sm font-light tracking-wide">{group.company}</h2>
+                    <p className="text-[10px] uppercase tracking-widest text-white/35 mt-1">
+                      {group.report_count} report{group.report_count !== 1 ? 's' : ''}
+                    </p>
                   </div>
                   <Link
                     href={`/papers/${encodeURIComponent(extractTicker(group.company))}`}
-                    className="text-sm text-blue-600 hover:text-blue-800"
+                    className="text-[10px] uppercase tracking-widest text-white/50 hover:text-white shrink-0"
                   >
-                    View All
+                    Open
                   </Link>
                 </div>
-                
-                <div className="divide-y divide-gray-100">
-                  {group.reports.slice(0, 3).map((report) => (
-                    <div key={report.id} className="p-4 flex items-center justify-between hover:bg-gray-50">
+                <div className="divide-y divide-white/5">
+                  {group.reports.slice(0, 4).map((report) => (
+                    <div key={report.id} className="px-5 py-3 flex items-center justify-between gap-3">
                       <div>
-                        <p className="text-sm font-medium text-gray-900">Version {report.version}</p>
-                        <p className="text-xs text-gray-500">{formatDate(report.created_at)}</p>
+                        <p className="text-xs text-white/80">Version {report.version}</p>
+                        <p className="text-[10px] text-white/35 mt-0.5">{formatDate(report.created_at)}</p>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <Link
-                          href={`/papers/${encodeURIComponent(extractTicker(group.company))}?report=${report.id}`}
-                          className="text-sm text-gray-600 hover:text-gray-900"
-                        >
-                          Details
-                        </Link>
-                        <a
-                          href={`${BACKEND_BASE}${report.report_path}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors"
-                        >
-                          Download
-                        </a>
-                      </div>
+                      <a
+                        href={`${BACKEND_BASE}${report.report_path}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] uppercase tracking-widest px-3 py-1.5 border border-white/20 rounded-sm hover:bg-white/5"
+                      >
+                        PDF
+                      </a>
                     </div>
                   ))}
                 </div>

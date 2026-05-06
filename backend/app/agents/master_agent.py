@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Set
 from openai import OpenAI
 from app.config.settings import get_settings
 from app.agents.tools import TOOL_DEFINITIONS, execute_tool, get_portfolio_context
@@ -65,22 +65,45 @@ def detect_custom_section_topic(custom_request: str) -> tuple[str, str]:
     
     # If custom request exists but doesn't match known patterns, create a custom section anyway
     if len(custom_request) > 10:
-        # Use AI to generate a section title
-        return custom_request.split()[0:3], "custom"
+        title = " ".join(custom_request.split()[:3])
+        return title, "custom"
     
     return None, None
 
 
-def run_master_agent(ticker: str, company_name: str, user_query: str, custom_request: str = "") -> Dict[str, Any]:
+def run_master_agent(
+    ticker: str,
+    company_name: str,
+    user_query: str,
+    custom_request: str = "",
+    omit_sections: Optional[List[str]] = None,
+    add_sections: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Master agent that uses tool calling to gather data and generate analysis."""
-    
-    # Gather all data first
-    gathered_data = {
-        "company_info": execute_tool("get_company_info", {"ticker": ticker}),
-        "financials": execute_tool("get_financials", {"ticker": ticker}),
-        "risks": execute_tool("get_risks", {"ticker": ticker}),
-        "news": execute_tool("get_news", {"ticker": ticker}),
-    }
+    omit: Set[str] = {str(s).lower() for s in (omit_sections or []) if s}
+    add_list = [str(s) for s in (add_sections or []) if s]
+
+    # Gather all data first (respect omissions)
+    gathered_data: Dict[str, Any] = {}
+    if "company" not in omit:
+        gathered_data["company_info"] = execute_tool("get_company_info", {"ticker": ticker})
+    else:
+        gathered_data["company_info"] = {"omitted": True}
+
+    if "financials" not in omit:
+        gathered_data["financials"] = execute_tool("get_financials", {"ticker": ticker})
+    else:
+        gathered_data["financials"] = {"omitted": True}
+
+    if "risks" not in omit:
+        gathered_data["risks"] = execute_tool("get_risks", {"ticker": ticker})
+    else:
+        gathered_data["risks"] = {"omitted": True}
+
+    if "news" not in omit:
+        gathered_data["news"] = execute_tool("get_news", {"ticker": ticker})
+    else:
+        gathered_data["news"] = {"omitted": True, "articles": []}
     
     if custom_request:
         gathered_data["other"] = execute_tool("get_other", {"ticker": ticker, "custom_request": custom_request})
@@ -94,13 +117,20 @@ def run_master_agent(ticker: str, company_name: str, user_query: str, custom_req
     
     # Generate analysis
     analysis = generate_analysis(
-        ticker, company_name, user_query, custom_request, 
-        gathered_data, portfolio_context, custom_section_title
+        ticker,
+        company_name,
+        user_query,
+        custom_request,
+        gathered_data,
+        portfolio_context,
+        custom_section_title,
+        omit_sections=omit,
+        add_sections=add_list,
     )
     
     # Generate news reflections
     news_data = gathered_data.get("news", {})
-    if news_data.get("articles"):
+    if "news" not in omit and news_data.get("articles"):
         news_reflections = generate_news_reflections(ticker, company_name, news_data["articles"][:5])
         analysis["news_reflections"] = news_reflections
     
@@ -208,12 +238,51 @@ Repeat for each headline."""
         } for a in articles]
 
 
-def generate_analysis(ticker: str, company_name: str, user_query: str, custom_request: str, 
-                     data: Dict[str, Any], portfolio_context: Dict[str, Any] = None,
-                     custom_section_title: str = None) -> Dict[str, str]:
+def generate_analysis(
+    ticker: str,
+    company_name: str,
+    user_query: str,
+    custom_request: str,
+    data: Dict[str, Any],
+    portfolio_context: Dict[str, Any] = None,
+    custom_section_title: str = None,
+    omit_sections: Optional[Set[str]] = None,
+    add_sections: Optional[List[str]] = None,
+) -> Dict[str, str]:
     """Generate written analysis sections from gathered data"""
-    
+    omit = omit_sections or set()
+    add_list = add_sections or []
+
     data_summary = json.dumps(data, indent=2, default=str)[:12000]
+
+    omit_lines = []
+    if "company" in omit:
+        omit_lines.append("COMPANY_OVERVIEW (do not include this section at all)")
+    if "financials" in omit:
+        omit_lines.append("FINANCIAL_ANALYSIS (do not include this section at all)")
+    if "risks" in omit:
+        omit_lines.append("RISK_ASSESSMENT (do not include this section at all)")
+    if "news" in omit:
+        omit_lines.append("NEWS_ANALYSIS (do not include this section at all)")
+    if "competitors" in omit:
+        omit_lines.append(
+            "any dedicated competitive landscape / competitor benchmarking section "
+            "(you may still mention competition briefly inside other sections if needed)"
+        )
+    omit_instruction = ""
+    if omit_lines:
+        omit_instruction = (
+            "\nOMIT THESE SECTIONS ENTIRELY (do not print their headers or body):\n- "
+            + "\n- ".join(omit_lines)
+        )
+
+    add_instruction = ""
+    if add_list:
+        add_instruction = (
+            f"\nADDITIONAL USER-REQUESTED TOPICS:\nThe user asked to also cover: {', '.join(add_list)}.\n"
+            "Include a section with header exactly:\nUSER_TOPICS:\n"
+            "with 2-4 paragraphs addressing these topics with specifics.\n"
+        )
     
     # Build portfolio section prompt if portfolio exists
     portfolio_prompt = ""
@@ -254,10 +323,12 @@ DATA:
 
 USER REQUEST: {user_query}
 {f'SPECIFIC FOCUS: {custom_request}' if custom_request else ''}
+{omit_instruction}
+{add_instruction}
 
 Write a professional stock research report. Output ONLY plain text paragraphs, NOT JSON or bullet points.
 
-Write these sections as flowing paragraphs:
+Write these sections as flowing paragraphs (skip any section you were told to OMIT entirely — do not include its header or text):
 
 RECOMMENDATION:
 Write 2-3 paragraphs. Start with a clear BUY, HOLD, or SELL recommendation. Explain the key reasons supporting this recommendation. Include target price if data supports it.
@@ -275,7 +346,7 @@ NEWS_ANALYSIS:
 Write 1-2 paragraphs about recent news, market sentiment, and potential upcoming catalysts.
 {custom_section_prompt}{portfolio_prompt}
 
-Format your response EXACTLY like this (with section headers in caps followed by colon):
+Format your response EXACTLY like this (with section headers in caps followed by colon). Only include headers for sections you actually write:
 
 RECOMMENDATION:
 [your paragraphs here]
@@ -295,6 +366,10 @@ NEWS_ANALYSIS:
 CUSTOM_SECTION:
 [your paragraphs addressing the custom request here]
 ''' if custom_section_title else ''}
+{f'''
+USER_TOPICS:
+[your paragraphs here]
+''' if add_list else ''}
 PORTFOLIO_FIT:
 [your paragraphs here]"""
 
@@ -315,6 +390,7 @@ PORTFOLIO_FIT:
         "risk_assessment": "",
         "news_analysis": "",
         "custom_section": "",
+        "user_topics": "",
         "portfolio_fit": ""
     }
     
@@ -352,6 +428,11 @@ PORTFOLIO_FIT:
             if current_section:
                 sections[current_section] = '\n'.join(current_content).strip()
             current_section = "custom_section"
+            current_content = [line.split(':', 1)[1].strip()] if ':' in line else []
+        elif line_upper.startswith('USER_TOPICS:') or line_upper.startswith('USER TOPICS:'):
+            if current_section:
+                sections[current_section] = '\n'.join(current_content).strip()
+            current_section = "user_topics"
             current_content = [line.split(':', 1)[1].strip()] if ':' in line else []
         elif line_upper.startswith('PORTFOLIO_FIT:') or line_upper.startswith('PORTFOLIO FIT:'):
             if current_section:

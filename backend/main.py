@@ -1,16 +1,54 @@
 import os
-import uvicorn
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from app.routers import research_router, papers_router, feedback_router, portfolio_router
+import logging
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="Stock Research API", version="1.0.0")
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from slowapi.errors import RateLimitExceeded
+
+from app.routers import research_router, papers_router, feedback_router, portfolio_router
+from app.limiter import limiter
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        from app.db import smoldb
+
+        smoldb.init_schema()
+        logger.info("smoldb schema initialized")
+    except Exception as e:
+        logger.warning("smoldb init skipped or failed (set SMOLDB_KEY): %s", e)
+    yield
+
+
+app = FastAPI(title="Stock Research API", version="1.0.0", lifespan=lifespan)
+
+app.state.limiter = limiter
+
+
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": getattr(exc, "detail", "Rate limit exceeded")},
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[
+        "https://market-scout-chi.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

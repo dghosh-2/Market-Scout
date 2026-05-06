@@ -1,16 +1,11 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-from app.db.file_storage import (
-    load_json, save_json, DATA_DIR
-)
-import os
+from app.db import smoldb
 import uuid
 from datetime import datetime
 
 router = APIRouter()
-
-PORTFOLIO_FILE = os.path.join(DATA_DIR, "portfolio.json")
 
 
 class Holding(BaseModel):
@@ -28,76 +23,88 @@ class PortfolioResponse(BaseModel):
     total_holdings: int
 
 
-def get_portfolio() -> List[dict]:
-    if not os.path.exists(PORTFOLIO_FILE):
-        return []
-    return load_json(PORTFOLIO_FILE)
+def _normalize_row(row: dict) -> dict:
+    return {str(k).lower(): v for k, v in row.items()}
 
 
-def save_portfolio(holdings: List[dict]):
-    save_json(PORTFOLIO_FILE, holdings)
+def _row_to_api_holding(r: dict) -> dict:
+    n = _normalize_row(r)
+    return {
+        "id": n.get("holding_id") or n.get("ticker"),
+        "ticker": n.get("ticker", ""),
+        "shares": float(n.get("shares") or 0),
+        "company_name": n.get("company_name") or n.get("ticker", ""),
+        "created_at": n.get("created_at") or "",
+        "updated_at": n.get("updated_at") or "",
+    }
 
 
 @router.get("/portfolio", response_model=PortfolioResponse)
 async def list_holdings():
-    holdings = get_portfolio()
+    smoldb.ensure_schema()
+    rows = smoldb.portfolio_list_all()
+    holdings = [_row_to_api_holding(r) for r in rows]
     return {
         "holdings": holdings,
-        "total_holdings": len(holdings)
+        "total_holdings": len(holdings),
     }
 
 
 @router.post("/portfolio")
 async def add_holding(holding: Holding):
-    holdings = get_portfolio()
-    
-    existing = next((h for h in holdings if h["ticker"].upper() == holding.ticker.upper()), None)
-    if existing:
-        raise HTTPException(status_code=400, detail=f"Holding for {holding.ticker} already exists. Use PUT to update.")
-    
+    smoldb.ensure_schema()
+    rows = smoldb.portfolio_list_all()
+    tick = holding.ticker.upper()
+    for r in rows:
+        if _normalize_row(r).get("ticker", "").upper() == tick:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Holding for {holding.ticker} already exists. Use PUT to update.",
+            )
+
+    now = datetime.utcnow().isoformat()
+    hid = str(uuid.uuid4())
+    smoldb.portfolio_upsert_insert(
+        ticker=tick,
+        shares=float(holding.shares),
+        company_name=holding.company_name or tick,
+        holding_id=hid,
+        created_at=now,
+        updated_at=now,
+        purchase_price=None,
+    )
+
     new_holding = {
-        "id": str(uuid.uuid4()),
-        "ticker": holding.ticker.upper(),
-        "shares": holding.shares,
-        "company_name": holding.company_name or holding.ticker.upper(),
-        "created_at": datetime.now().isoformat(),
-        "updated_at": datetime.now().isoformat()
+        "id": hid,
+        "ticker": tick,
+        "shares": float(holding.shares),
+        "company_name": holding.company_name or tick,
+        "created_at": now,
+        "updated_at": now,
     }
-    
-    holdings.append(new_holding)
-    save_portfolio(holdings)
-    
     return {"success": True, "holding": new_holding}
 
 
 @router.put("/portfolio/{ticker}")
 async def update_holding(ticker: str, update: HoldingUpdate):
-    holdings = get_portfolio()
-    
-    holding = next((h for h in holdings if h["ticker"].upper() == ticker.upper()), None)
-    if not holding:
+    smoldb.ensure_schema()
+    row = smoldb.portfolio_get(ticker)
+    if not row:
         raise HTTPException(status_code=404, detail=f"No holding found for {ticker}")
-    
-    holding["shares"] = update.shares
-    holding["updated_at"] = datetime.now().isoformat()
-    
-    save_portfolio(holdings)
-    
-    return {"success": True, "holding": holding}
+
+    now = datetime.utcnow().isoformat()
+    smoldb.portfolio_update_shares(ticker, float(update.shares), now)
+    row2 = smoldb.portfolio_get(ticker)
+    return {"success": True, "holding": _row_to_api_holding(row2 or {})}
 
 
 @router.delete("/portfolio/{ticker}")
 async def delete_holding(ticker: str):
-    holdings = get_portfolio()
-    
-    original_count = len(holdings)
-    holdings = [h for h in holdings if h["ticker"].upper() != ticker.upper()]
-    
-    if len(holdings) == original_count:
+    smoldb.ensure_schema()
+    row = smoldb.portfolio_get(ticker)
+    if not row:
         raise HTTPException(status_code=404, detail=f"No holding found for {ticker}")
-    
-    save_portfolio(holdings)
-    
+    smoldb.portfolio_delete(ticker)
     return {"success": True, "message": f"Removed {ticker} from portfolio"}
 
 
@@ -105,49 +112,49 @@ async def delete_holding(ticker: str):
 async def get_portfolio_summary():
     """Get portfolio summary with current prices"""
     from app.agents.tools import get_financials
-    
-    holdings = get_portfolio()
-    
-    if not holdings:
+
+    smoldb.ensure_schema()
+    rows = smoldb.portfolio_list_all()
+
+    if not rows:
         return {
             "holdings": [],
             "total_value": 0,
-            "total_holdings": 0
+            "total_holdings": 0,
         }
-    
+
     enriched = []
     total_value = 0
-    
-    for h in holdings:
+
+    for r in rows:
+        h = _row_to_api_holding(r)
         try:
             financials = get_financials(h["ticker"])
             current_price = financials.get("current_price", 0) or 0
             value = current_price * h["shares"]
             total_value += value
-            
+
             enriched.append({
                 **h,
                 "current_price": current_price,
                 "value": value,
                 "sector": financials.get("sector", "Unknown"),
-                "industry": financials.get("industry", "Unknown")
+                "industry": financials.get("industry", "Unknown"),
             })
-        except:
+        except Exception:
             enriched.append({
                 **h,
                 "current_price": 0,
                 "value": 0,
                 "sector": "Unknown",
-                "industry": "Unknown"
+                "industry": "Unknown",
             })
-    
+
     for h in enriched:
         h["weight"] = (h["value"] / total_value * 100) if total_value > 0 else 0
-    
+
     return {
         "holdings": enriched,
         "total_value": total_value,
-        "total_holdings": len(enriched)
+        "total_holdings": len(enriched),
     }
-
-

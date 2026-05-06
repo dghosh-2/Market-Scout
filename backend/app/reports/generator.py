@@ -403,6 +403,11 @@ def generate_report(data: Dict[str, Any], report_id: str) -> str:
         section_title = custom_section_title if custom_section_title else "Additional Analysis"
         story.append(Paragraph(section_title, styles['Section_Header']))
         story.append(Paragraph(custom_section, styles['Body_Text']))
+
+    user_topics = analysis.get("user_topics", "")
+    if user_topics and str(user_topics).strip():
+        story.append(Paragraph("Additional Topics", styles['Section_Header']))
+        story.append(Paragraph(str(user_topics), styles['Body_Text']))
     
     # Portfolio Fit Analysis
     portfolio_fit = analysis.get("portfolio_fit", "")

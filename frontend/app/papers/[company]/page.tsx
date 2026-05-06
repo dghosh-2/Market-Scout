@@ -1,18 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import NavBar from '../../../components/NavBar';
 import Link from 'next/link';
-
-// Production: Render backend, Development: local proxy
-const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-  ? 'https://market-scout-emg1.onrender.com/api'
-  : '/api';
-
-const BACKEND_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-  ? 'https://market-scout-emg1.onrender.com'
-  : 'http://localhost:8000';
+import { getApiBase, getBackendOrigin } from '../../../lib/env';
 
 interface Report {
   id: string;
@@ -22,7 +14,7 @@ interface Report {
   report_path: string;
 }
 
-export default function CompanyPapersPage() {
+function CompanyPapersInner() {
   const params = useParams();
   const searchParams = useSearchParams();
   const company = decodeURIComponent(params.company as string);
@@ -31,12 +23,15 @@ export default function CompanyPapersPage() {
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [feedback, setFeedback] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [feedbackById, setFeedbackById] = useState<Record<string, string>>({});
+  const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [feedbackSuccess, setFeedbackSuccess] = useState('');
 
+  const API_BASE = getApiBase();
+  const BACKEND_BASE = getBackendOrigin();
+
   useEffect(() => {
-    fetchReports();
+    void fetchReports();
   }, [company]);
 
   const fetchReports = async () => {
@@ -58,146 +53,109 @@ export default function CompanyPapersPage() {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
     });
   };
 
   const handleFeedback = async (reportId: string) => {
-    if (!feedback.trim()) return;
+    const feedback = (feedbackById[reportId] || '').trim();
+    if (!feedback) return;
 
-    setSubmitting(true);
+    setSubmittingId(reportId);
     setFeedbackSuccess('');
+    setError('');
 
     try {
       const res = await fetch(`${API_BASE}/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ report_id: reportId, feedback })
+        body: JSON.stringify({ report_id: reportId, feedback }),
       });
 
       const data = await res.json();
 
       if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Failed to submit feedback');
+        throw new Error(data.message || data.detail || 'Failed to submit feedback');
       }
 
-      setFeedbackSuccess('New report generated successfully!');
-      setFeedback('');
-      fetchReports();
+      setFeedbackSuccess('New version generated.');
+      setFeedbackById((prev) => ({ ...prev, [reportId]: '' }));
+      await fetchReports();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit feedback');
     } finally {
-      setSubmitting(false);
+      setSubmittingId(null);
     }
   };
 
-  const getLogoUrl = () => {
-    const domains: Record<string, string> = {
-      'AAPL': 'apple.com',
-      'MSFT': 'microsoft.com',
-      'GOOGL': 'google.com',
-      'AMZN': 'amazon.com',
-      'META': 'meta.com',
-      'TSLA': 'tesla.com',
-      'NVDA': 'nvidia.com',
-      'TSM': 'tsmc.com',
-    };
-    const domain = domains[company] || `${company.toLowerCase()}.com`;
-    return `https://logo.clearbit.com/${domain}`;
+  const setFeedback = (reportId: string, value: string) => {
+    setFeedbackById((prev) => ({ ...prev, [reportId]: value }));
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-black text-white">
       <NavBar />
-      
-      <main className="max-w-6xl mx-auto px-6 py-12">
-        <div className="mb-6">
-          <Link href="/papers" className="text-sm text-blue-600 hover:text-blue-800">
-            Back to All Papers
-          </Link>
-        </div>
 
-        <div className="flex items-center gap-4 mb-10">
-          <img
-            src={getLogoUrl()}
-            alt={company}
-            className="w-16 h-16 rounded-lg object-contain bg-white border border-gray-200"
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = 'none';
-            }}
-          />
-          <div>
-            <h1 className="text-3xl font-semibold text-gray-900">{company}</h1>
-            <p className="text-gray-600">{reports.length} research report{reports.length !== 1 ? 's' : ''}</p>
-          </div>
-        </div>
+      <main className="max-w-3xl mx-auto px-6 py-14">
+        <Link href="/papers" className="text-[10px] uppercase tracking-widest text-white/45 hover:text-white">
+          ← Papers
+        </Link>
 
-        {loading && (
-          <div className="flex items-center justify-center py-20">
-            <div className="w-8 h-8 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin" />
-          </div>
-        )}
+        <h1 className="mt-8 text-2xl font-extralight tracking-[0.15em] uppercase">{company}</h1>
+        <p className="text-sm text-white/40 font-light mt-2">
+          {reports.length} report{reports.length !== 1 ? 's' : ''}
+        </p>
+
+        {loading && <p className="text-white/40 mt-12 text-sm">Loading…</p>}
 
         {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-red-700">{error}</p>
-          </div>
+          <div className="mt-6 border border-white/15 px-4 py-3 text-sm text-white/70 rounded-sm">{error}</div>
         )}
 
         {feedbackSuccess && (
-          <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-            <p className="text-green-700">{feedbackSuccess}</p>
-          </div>
+          <div className="mt-6 border border-white/20 px-4 py-3 text-sm text-white/80 rounded-sm">{feedbackSuccess}</div>
         )}
 
         {!loading && reports.length > 0 && (
-          <div className="space-y-4">
+          <div className="mt-10 space-y-4">
             {reports.map((report) => (
               <div
                 key={report.id}
-                className={`bg-white border rounded-lg overflow-hidden ${
-                  selectedReportId === report.id ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
+                className={`border rounded-sm overflow-hidden ${
+                  selectedReportId === report.id ? 'border-white/40' : 'border-white/10'
                 }`}
               >
-                <div className="p-5 flex items-center justify-between">
+                <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-white/10">
                   <div>
-                    <h3 className="text-lg font-medium text-gray-900">Version {report.version}</h3>
-                    <p className="text-sm text-gray-500">{formatDate(report.created_at)}</p>
+                    <h3 className="text-xs uppercase tracking-widest text-white/50">Version {report.version}</h3>
+                    <p className="text-[11px] text-white/35 mt-1">{formatDate(report.created_at)}</p>
                   </div>
                   <a
                     href={`${BACKEND_BASE}${report.report_path}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="px-6 py-2.5 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors"
+                    className="text-[10px] uppercase tracking-widest px-4 py-2 bg-white text-black rounded-sm text-center hover:bg-white/90"
                   >
-                    Download PDF
+                    PDF
                   </a>
                 </div>
 
-                <div className="px-5 pb-5 border-t border-gray-100 pt-4">
-                  <p className="text-sm font-medium text-gray-700 mb-2">Request Updated Report</p>
-                  <div className="flex gap-3">
-                    <input
-                      type="text"
-                      value={selectedReportId === report.id ? feedback : ''}
-                      onChange={(e) => {
-                        if (selectedReportId === report.id || !selectedReportId) {
-                          setFeedback(e.target.value);
-                        }
-                      }}
-                      onFocus={() => {
-                        window.history.replaceState({}, '', `?report=${report.id}`);
-                      }}
-                      placeholder="e.g., Include more detail on dividends, focus on recent acquisitions..."
-                      className="flex-1 px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                <div className="px-5 py-4">
+                  <p className="text-[10px] uppercase tracking-widest text-white/35 mb-2">Feedback</p>
+                  <div className="flex flex-col gap-2">
+                    <textarea
+                      value={feedbackById[report.id] || ''}
+                      onChange={(e) => setFeedback(report.id, e.target.value)}
+                      placeholder="What should change?"
+                      rows={2}
+                      className="w-full bg-white/[0.03] border border-white/10 px-3 py-2 text-sm outline-none font-light placeholder:text-white/25"
                     />
                     <button
-                      onClick={() => handleFeedback(report.id)}
-                      disabled={submitting || !feedback.trim()}
-                      className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                      type="button"
+                      onClick={() => void handleFeedback(report.id)}
+                      disabled={submittingId === report.id || !(feedbackById[report.id] || '').trim()}
+                      className="self-start text-[10px] uppercase tracking-widest px-4 py-2 border border-white/25 rounded-sm hover:bg-white/5 disabled:opacity-30"
                     >
-                      {submitting ? 'Generating...' : 'Generate New'}
+                      {submittingId === report.id ? '…' : 'Regenerate'}
                     </button>
                   </div>
                 </div>
@@ -207,5 +165,19 @@ export default function CompanyPapersPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function CompanyPapersPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-black text-white flex items-center justify-center text-sm font-light">
+          Loading…
+        </div>
+      }
+    >
+      <CompanyPapersInner />
+    </Suspense>
   );
 }

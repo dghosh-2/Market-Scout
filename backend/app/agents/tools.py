@@ -1,6 +1,5 @@
 import yfinance as yf
 import os
-import json
 from typing import Dict, Any, List
 from datetime import datetime, timedelta
 
@@ -312,21 +311,34 @@ TOOL_DEFINITIONS = [
 ]
 
 
+def _normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {str(k).lower(): v for k, v in row.items()}
+
+
 def get_portfolio_context() -> Dict[str, Any]:
     """Get current portfolio holdings with enriched data for analysis"""
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    DATA_DIR = os.path.join(BASE_DIR, "data")
-    PORTFOLIO_FILE = os.path.join(DATA_DIR, "portfolio.json")
-    
-    if not os.path.exists(PORTFOLIO_FILE):
-        return {"holdings": [], "total_value": 0, "sectors": {}}
-    
     try:
-        with open(PORTFOLIO_FILE, "r") as f:
-            holdings = json.load(f)
-    except:
+        from app.db import smoldb
+
+        smoldb.ensure_schema()
+        rows = smoldb.portfolio_list_all()
+    except Exception:
         return {"holdings": [], "total_value": 0, "sectors": {}}
-    
+
+    holdings = []
+    for r in rows:
+        nr = _normalize_row(r)
+        holdings.append(
+            {
+                "id": nr.get("holding_id") or nr.get("ticker"),
+                "ticker": nr.get("ticker", ""),
+                "shares": float(nr.get("shares") or 0),
+                "company_name": nr.get("company_name") or nr.get("ticker", ""),
+                "created_at": nr.get("created_at", ""),
+                "updated_at": nr.get("updated_at", ""),
+            }
+        )
+
     if not holdings:
         return {"holdings": [], "total_value": 0, "sectors": {}}
     

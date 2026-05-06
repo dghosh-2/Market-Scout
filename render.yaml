@@ -11,3 +11,5 @@ services:
         value: "3.11"
       - key: OPENAI_API_KEY
         sync: false
+      - key: SMOLDB_KEY
+        sync: false

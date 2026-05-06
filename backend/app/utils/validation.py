@@ -136,10 +136,22 @@ def parse_user_query(query: str) -> Dict[str, Any]:
             for section in ['news', 'financials', 'risks', 'company', 'competitors']:
                 if section in custom_request.lower():
                     omissions.append(section)
+
+    add_sections: list = []
+    cr_lower = custom_request.lower()
+    if "add section" in cr_lower or "include section" in cr_lower or "also cover" in cr_lower:
+        # Heuristic: take text after last ':' or '—' in custom_request for add hints
+        hint = custom_request
+        for sep in [":", "—", " - "]:
+            if sep in hint:
+                hint = hint.split(sep)[-1].strip()
+        if hint and len(hint) > 3 and hint != custom_request:
+            add_sections.append(hint.strip())
     
     return {
         "company_query": company_part,
         "custom_request": custom_request,
         "omissions": omissions,
+        "add_sections": add_sections,
         "original_query": query
     }

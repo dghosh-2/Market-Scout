@@ -1,16 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import NavBar from '../../components/NavBar';
-
-// Production: Render backend, Development: local proxy
-const API_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-  ? 'https://market-scout-emg1.onrender.com/api'
-  : '/api';
-
-const BACKEND_BASE = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-  ? 'https://market-scout-emg1.onrender.com'
-  : 'http://localhost:8000';
+import { getApiBase, getBackendOrigin } from '../../lib/env';
+import { feedbackApi, papersApi } from '../../lib/api';
 
 interface PricePoint {
   date: string;
@@ -23,47 +17,100 @@ interface CompanyInfo {
   sector: string;
   industry: string;
   market_cap: number;
-  logo_url: string;
 }
 
-interface ProgressStep {
+interface ReportRow {
   id: string;
-  label: string;
-  completed: boolean;
+  version: number;
+  created_at: string;
+  report_path: string;
+  company?: string;
+  ticker?: string;
 }
 
-const agentDescriptions: Record<string, string> = {
-  parsing: 'Understanding your request...',
-  resolving: 'Identifying the company...',
-  fetching_company: 'Gathering company profile...',
-  fetching_financials: 'Analyzing financial statements...',
-  fetching_risks: 'Evaluating risk factors...',
-  fetching_news: 'Scanning market news...',
-  generating: 'AI agents synthesizing insights...',
-  creating_pdf: 'Compiling your report...',
+type StreamPayload = {
+  step: string;
+  message: string;
+  ticker?: string;
+  company_name?: string;
+  report_id?: string;
+  report_path?: string;
+  company?: string;
+  company_info?: Record<string, unknown>;
+  price_data?: { prices?: PricePoint[] };
 };
 
-export default function ResearchPage() {
+function ResearchPageInner() {
+  const searchParams = useSearchParams();
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [streamMessage, setStreamMessage] = useState('');
   const [error, setError] = useState('');
   const [reportPath, setReportPath] = useState('');
+  const [reportId, setReportId] = useState<string | null>(null);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
   const [priceData, setPriceData] = useState<PricePoint[]>([]);
-  const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
-  const [currentStep, setCurrentStep] = useState('');
+  const [versions, setVersions] = useState<ReportRow[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [viewAnalysis, setViewAnalysis] = useState<Record<string, string>>({});
+  const [feedback, setFeedback] = useState('');
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const esRef = useRef<EventSource | null>(null);
 
-  const steps = [
-    { id: 'parsing', label: 'Parse' },
-    { id: 'resolving', label: 'Resolve' },
-    { id: 'fetching_company', label: 'Company' },
-    { id: 'fetching_financials', label: 'Financials' },
-    { id: 'fetching_risks', label: 'Risks' },
-    { id: 'fetching_news', label: 'News' },
-    { id: 'generating', label: 'Generate' },
-    { id: 'creating_pdf', label: 'Export' },
-  ];
+  const API_BASE = getApiBase();
+  const BACKEND_BASE = getBackendOrigin();
+
+  useEffect(() => {
+    const t = searchParams.get('ticker');
+    if (t) setQuery(t.toUpperCase());
+  }, [searchParams]);
+
+  const loadVersions = useCallback(async (ticker: string, preferredId?: string | null) => {
+    try {
+      const data = await papersApi.getCompanyPapers(ticker);
+      const list = (data.reports || []) as ReportRow[];
+      setVersions(list);
+      if (preferredId && list.some((r) => r.id === preferredId)) {
+        setSelectedVersionId(preferredId);
+      } else if (list.length) {
+        setSelectedVersionId(list[0].id);
+      }
+    } catch {
+      setVersions([]);
+    }
+  }, []);
+
+  const loadReportDetail = useCallback(async (id: string) => {
+    try {
+      const data = await papersApi.getPaper(id);
+      const raw = data.data?.analysis;
+      if (typeof raw === 'string' && raw.trim()) {
+        try {
+          const parsed = JSON.parse(raw) as Record<string, string>;
+          setViewAnalysis(parsed);
+        } catch {
+          setViewAnalysis({});
+        }
+      } else {
+        setViewAnalysis({});
+      }
+    } catch {
+      setViewAnalysis({});
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedVersionId) {
+      loadReportDetail(selectedVersionId);
+    }
+  }, [selectedVersionId, loadReportDetail]);
+
+  useEffect(() => {
+    if (!selectedVersionId || !versions.length) return;
+    const v = versions.find((x) => x.id === selectedVersionId);
+    if (v?.report_path) setReportPath(v.report_path);
+  }, [selectedVersionId, versions]);
 
   useEffect(() => {
     if (priceData.length > 0 && canvasRef.current) {
@@ -86,24 +133,22 @@ export default function ResearchPage() {
 
     const width = rect.width;
     const height = rect.height;
-    const padding = { top: 20, right: 20, bottom: 30, left: 50 };
+    const padding = { top: 20, right: 16, bottom: 28, left: 44 };
 
     ctx.clearRect(0, 0, width, height);
 
-    const prices = priceData.map(p => p.close);
+    const prices = priceData.map((p) => p.close);
     const minPrice = Math.min(...prices) * 0.98;
     const maxPrice = Math.max(...prices) * 1.02;
-    const priceRange = maxPrice - minPrice;
+    const priceRange = maxPrice - minPrice || 1;
 
     const startPrice = prices[0];
     const endPrice = prices[prices.length - 1];
     const isPositive = endPrice >= startPrice;
-    const lineColor = isPositive ? '#059669' : '#e11d48';
-    const gradientStart = isPositive ? 'rgba(5, 150, 105, 0.15)' : 'rgba(225, 29, 72, 0.15)';
-    const gradientEnd = isPositive ? 'rgba(5, 150, 105, 0)' : 'rgba(225, 29, 72, 0)';
+    const lineColor = isPositive ? '#ffffff' : '#a3a3a3';
+    const muted = 'rgba(255,255,255,0.12)';
 
-    // Draw grid lines
-    ctx.strokeStyle = '#f5f5f5';
+    ctx.strokeStyle = muted;
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
       const y = padding.top + (height - padding.top - padding.bottom) * (i / 4);
@@ -112,23 +157,21 @@ export default function ResearchPage() {
       ctx.lineTo(width - padding.right, y);
       ctx.stroke();
 
-      const price = maxPrice - (priceRange * i / 4);
-      ctx.fillStyle = '#a3a3a3';
-      ctx.font = '11px DM Sans';
+      const price = maxPrice - (priceRange * i) / 4;
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(`$${price.toFixed(0)}`, padding.left - 8, y + 4);
+      ctx.fillText(`$${price.toFixed(0)}`, padding.left - 6, y + 3);
     }
 
     const chartWidth = width - padding.left - padding.right;
     const chartHeight = height - padding.top - padding.bottom;
-    const xStep = chartWidth / (priceData.length - 1);
+    const xStep = chartWidth / (priceData.length - 1 || 1);
 
-    // Create gradient fill
     const gradient = ctx.createLinearGradient(0, padding.top, 0, height - padding.bottom);
-    gradient.addColorStop(0, gradientStart);
-    gradient.addColorStop(1, gradientEnd);
+    gradient.addColorStop(0, isPositive ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)');
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
 
-    // Draw filled area
     ctx.beginPath();
     ctx.moveTo(padding.left, height - padding.bottom);
     priceData.forEach((point, i) => {
@@ -141,12 +184,9 @@ export default function ResearchPage() {
     ctx.fillStyle = gradient;
     ctx.fill();
 
-    // Draw line
     ctx.beginPath();
     ctx.strokeStyle = lineColor;
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    ctx.lineWidth = 1.5;
     priceData.forEach((point, i) => {
       const x = padding.left + i * xStep;
       const y = padding.top + chartHeight * (1 - (point.close - minPrice) / priceRange);
@@ -155,16 +195,19 @@ export default function ResearchPage() {
     });
     ctx.stroke();
 
-    // Draw date labels
-    ctx.fillStyle = '#a3a3a3';
-    ctx.font = '11px DM Sans';
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = 'center';
     const labelIndices = [0, Math.floor(priceData.length / 2), priceData.length - 1];
-    labelIndices.forEach(i => {
+    labelIndices.forEach((i) => {
       if (priceData[i]) {
         const x = padding.left + i * xStep;
         const date = new Date(priceData[i].date);
-        ctx.fillText(date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }), x, height - 8);
+        ctx.fillText(
+          date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+          x,
+          height - 8
+        );
       }
     });
   };
@@ -176,377 +219,321 @@ export default function ResearchPage() {
     return `$${value.toFixed(0)}`;
   };
 
+  const closeStream = () => {
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
 
+    closeStream();
     setIsLoading(true);
     setError('');
     setReportPath('');
+    setReportId(null);
+    setStreamMessage('');
+    setVersions([]);
+    setSelectedVersionId(null);
+    setViewAnalysis({});
     setCompanyInfo(null);
     setPriceData([]);
-    setProgressSteps(steps.map(s => ({ ...s, completed: false })));
-    setCurrentStep('parsing');
 
-    try {
-      const updateProgress = (stepId: string) => {
-        setCurrentStep(stepId);
-        setProgressSteps(prev => prev.map(s => ({
-          ...s,
-          completed: steps.findIndex(st => st.id === s.id) < steps.findIndex(st => st.id === stepId)
-        })));
-      };
+    const streamUrl = `${API_BASE}/research/stream/${encodeURIComponent(query)}`;
+    const es = new EventSource(streamUrl);
+    esRef.current = es;
 
-      updateProgress('parsing');
-      await new Promise(r => setTimeout(r, 300));
-
-      updateProgress('resolving');
-      await new Promise(r => setTimeout(r, 300));
-
-      updateProgress('fetching_company');
-      
+    es.onmessage = (evt) => {
       try {
-        const previewRes = await fetch(`${API_BASE}/research/preview/${encodeURIComponent(query)}`);
-        if (previewRes.ok) {
-          const preview = await previewRes.json();
+        const data = JSON.parse(evt.data) as StreamPayload;
+        setStreamMessage(data.message || '');
+        if (data.step === 'resolved' && data.ticker && data.company_name) {
           setCompanyInfo({
-            name: preview.company_name,
-            ticker: preview.ticker,
-            sector: preview.company_info?.sector || '',
-            industry: preview.company_info?.industry || '',
-            market_cap: preview.company_info?.market_cap || 0,
-            logo_url: `https://logo.clearbit.com/${preview.company_info?.website?.replace('https://', '').replace('http://', '').split('/')[0]}` || ''
+            name: data.company_name,
+            ticker: data.ticker,
+            sector: '',
+            industry: '',
+            market_cap: 0,
           });
-          if (preview.price_data?.prices) {
-            setPriceData(preview.price_data.prices);
+        }
+        if (data.step === 'complete') {
+          if (data.report_path) setReportPath(data.report_path);
+          if (data.report_id) setReportId(data.report_id);
+          if (data.ticker && data.company_name) {
+            const ci = data.company_info as Record<string, unknown> | undefined;
+            setCompanyInfo({
+              name: data.company_name,
+              ticker: data.ticker,
+              sector: (ci?.sector as string) || '',
+              industry: (ci?.industry as string) || '',
+              market_cap: Number(ci?.market_cap) || 0,
+            });
+            const prices = data.price_data?.prices;
+            if (prices?.length) setPriceData(prices);
           }
+          if (data.ticker) {
+            void loadVersions(data.ticker, data.report_id || null);
+            if (data.report_id) void loadReportDetail(data.report_id);
+          }
+          closeStream();
+          setIsLoading(false);
+        }
+        if (data.step === 'error') {
+          setError(data.message || 'Research failed');
+          closeStream();
+          setIsLoading(false);
         }
       } catch {
-        // Continue without preview
+        /* ignore parse */
       }
+    };
 
-      updateProgress('fetching_financials');
-      await new Promise(r => setTimeout(r, 500));
-
-      updateProgress('fetching_risks');
-      await new Promise(r => setTimeout(r, 400));
-
-      updateProgress('fetching_news');
-      await new Promise(r => setTimeout(r, 400));
-
-      updateProgress('generating');
-      
-      const response = await fetch(`${API_BASE}/research`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query })
-      });
-
-      updateProgress('creating_pdf');
-      await new Promise(r => setTimeout(r, 300));
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || data.detail || 'Research failed');
-      }
-
-      setReportPath(data.report_path);
-      setProgressSteps(prev => prev.map(s => ({ ...s, completed: true })));
-
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
+    es.onerror = () => {
+      setError('Connection lost. Try again.');
+      closeStream();
       setIsLoading(false);
+    };
+  };
+
+  const handleFeedback = async () => {
+    const id = selectedVersionId || reportId;
+    if (!id || !feedback.trim()) return;
+    setFeedbackBusy(true);
+    setError('');
+    try {
+      const res = await feedbackApi.submitFeedback(id, feedback);
+      if (!res.success) throw new Error(res.message || 'Feedback failed');
+      setFeedback('');
+      const t = companyInfo?.ticker;
+      if (t) {
+        await loadVersions(t, res.new_report_id || null);
+        if (res.new_report_id) {
+          setReportPath(res.new_report_path || '');
+          setReportId(res.new_report_id);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Feedback failed');
+    } finally {
+      setFeedbackBusy(false);
     }
   };
 
   const getLogoUrl = (ticker: string) => {
     const domains: Record<string, string> = {
-      'AAPL': 'apple.com',
-      'MSFT': 'microsoft.com',
-      'GOOGL': 'google.com',
-      'AMZN': 'amazon.com',
-      'META': 'meta.com',
-      'TSLA': 'tesla.com',
-      'NVDA': 'nvidia.com',
-      'TSM': 'tsmc.com',
-      'JPM': 'jpmorganchase.com',
-      'V': 'visa.com',
-      'WMT': 'walmart.com',
-      'DIS': 'disney.com',
-      'NFLX': 'netflix.com',
+      AAPL: 'apple.com',
+      MSFT: 'microsoft.com',
+      GOOGL: 'google.com',
+      AMZN: 'amazon.com',
+      META: 'meta.com',
+      TSLA: 'tesla.com',
+      NVDA: 'nvidia.com',
+      TSM: 'tsmc.com',
     };
     const domain = domains[ticker] || `${ticker.toLowerCase()}.com`;
     return `https://logo.clearbit.com/${domain}`;
   };
 
-  const currentStepIndex = steps.findIndex(s => s.id === currentStep);
-  const progress = isLoading ? ((currentStepIndex + 1) / steps.length) * 100 : 0;
+  const sectionOrder: { key: string; label: string }[] = [
+    { key: 'recommendation', label: 'Recommendation' },
+    { key: 'company_overview', label: 'Company' },
+    { key: 'financial_analysis', label: 'Financials' },
+    { key: 'risk_assessment', label: 'Risks' },
+    { key: 'news_analysis', label: 'News' },
+    { key: 'user_topics', label: 'Topics' },
+    { key: 'custom_section', label: 'Focus' },
+    { key: 'portfolio_fit', label: 'Portfolio fit' },
+  ];
 
   return (
-    <div className="min-h-screen bg-neutral-50 gradient-mesh">
+    <div className="min-h-screen bg-black text-white">
       <NavBar />
-      
-      <main className="max-w-5xl mx-auto px-6 py-12">
-        <div className="mb-12 animate-fadeIn">
-          <h1 className="text-4xl font-semibold text-neutral-900 mb-3 tracking-tight">
-            Stock Research
-          </h1>
-          <p className="text-lg text-neutral-500">
-            AI-powered analysis for smarter investment decisions
-          </p>
-        </div>
 
-        <form onSubmit={handleSubmit} className="mb-10 animate-fadeIn stagger-1">
-          <div className="relative">
+      <main className="max-w-3xl mx-auto px-6 py-16 md:py-24">
+        <header className="mb-14">
+          <p className="text-[10px] tracking-[0.35em] uppercase text-white/50 mb-4">Research</p>
+          <h1 className="text-3xl md:text-4xl font-extralight tracking-[0.08em] uppercase">
+            Market Scout
+          </h1>
+          <p className="mt-4 text-sm text-white/45 font-light max-w-md leading-relaxed">
+            Plain-English company lookup, live progress, PDF export.
+          </p>
+        </header>
+
+        <form onSubmit={handleSubmit} className="mb-12">
+          <div className="flex flex-col sm:flex-row gap-3 border border-white/15 rounded-sm p-1 bg-white/[0.02]">
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search any company... Apple, TSLA, or 'that AI chip company'"
-              className="w-full px-5 py-4 pr-32 bg-white border border-neutral-200 rounded-2xl 
-                       text-neutral-900 placeholder-neutral-400 text-lg
-                       focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500
-                       shadow-soft transition-all duration-200"
+              placeholder="Ticker or company name"
+              className="flex-1 bg-transparent px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none font-light"
               disabled={isLoading}
             />
             <button
               type="submit"
               disabled={isLoading || !query.trim()}
-              className="absolute right-2 top-1/2 -translate-y-1/2
-                       px-6 py-2.5 bg-neutral-900 text-white rounded-xl font-medium
-                       hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed
-                       transition-all duration-200 active:scale-[0.98]"
+              className="px-6 py-3 text-xs font-medium uppercase tracking-widest bg-white text-black rounded-sm hover:bg-white/90 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
-              {isLoading ? (
-                <span className="flex items-center gap-2">
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Analyzing
-                </span>
-              ) : 'Research'}
+              {isLoading ? 'Running' : 'Run'}
             </button>
           </div>
-          <p className="mt-3 text-sm text-neutral-400 pl-1">
-            Add context like "focus on dividends" or "growth potential" for tailored insights
-          </p>
         </form>
 
         {error && (
-          <div className="mb-8 p-4 bg-rose-50 border border-rose-200 rounded-2xl animate-scaleIn">
-            <p className="text-rose-700 flex items-center gap-2">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              {error}
-            </p>
+          <div className="mb-8 text-sm text-white/70 border border-white/20 px-4 py-3 rounded-sm">
+            {error}
           </div>
         )}
 
         {isLoading && (
-          <div className="mb-8 card p-8 animate-scaleIn">
-            {/* AI Agent Animation */}
-            <div className="flex flex-col items-center mb-8">
-              <div className="relative w-24 h-24 mb-6">
-                {/* Central orb */}
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-emerald-500 shadow-glow-blue animate-pulse" />
-                </div>
-                {/* Orbiting dots */}
-                <div className="absolute inset-0 animate-orbit">
-                  <div className="w-3 h-3 rounded-full bg-blue-500 shadow-glow-blue" />
-                </div>
-                <div className="absolute inset-0 animate-orbit-reverse">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-glow-emerald" />
-                </div>
-                {/* Pulse rings */}
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-16 h-16 rounded-full border-2 border-blue-500/30 animate-ping" style={{ animationDuration: '2s' }} />
-                </div>
-              </div>
-              
-              <div className="text-center">
-                <p className="text-lg font-medium text-neutral-900 mb-1">
-                  {agentDescriptions[currentStep] || 'Processing...'}
-                </p>
-                <p className="text-sm text-neutral-400 font-mono">
-                  {companyInfo?.ticker || query.toUpperCase().slice(0, 6)}
-                </p>
-              </div>
-            </div>
-
-            {/* Progress bar */}
-            <div className="mb-6">
-              <div className="h-1.5 bg-neutral-100 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-blue-500 to-emerald-500 rounded-full transition-all duration-500 ease-out relative progress-wave"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Step indicators */}
-            <div className="flex justify-between">
-              {progressSteps.map((step, index) => {
-                const isActive = currentStep === step.id;
-                const isPast = step.completed;
-                
-                return (
-                  <div key={step.id} className="flex flex-col items-center">
-                    <div className={`
-                      w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium
-                      transition-all duration-300
-                      ${isPast ? 'bg-emerald-500 text-white scale-100' : 
-                        isActive ? 'bg-blue-500 text-white scale-110 shadow-glow-blue' : 
-                        'bg-neutral-100 text-neutral-400'}
-                    `}>
-                      {isPast ? (
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      ) : (
-                        index + 1
-                      )}
-                    </div>
-                    <span className={`
-                      mt-2 text-xs font-medium transition-colors
-                      ${isActive ? 'text-blue-600' : isPast ? 'text-emerald-600' : 'text-neutral-400'}
-                    `}>
-                      {step.label}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+          <div className="mb-10 py-8 border-t border-b border-white/10">
+            <p className="text-xs tracking-[0.2em] uppercase text-white/40 mb-2">Status</p>
+            <p className="text-sm font-light text-white/80">{streamMessage || 'Starting…'}</p>
           </div>
         )}
 
         {companyInfo && (
-          <div className="mb-8 card overflow-hidden animate-fadeIn">
-            <div className="p-6 border-b border-neutral-100">
-              <div className="flex items-center gap-5">
-                <div className="relative">
-                  <img
-                    src={getLogoUrl(companyInfo.ticker)}
-                    alt={companyInfo.name}
-                    className="w-16 h-16 rounded-2xl object-contain bg-white border border-neutral-100 p-2"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = 'none';
-                    }}
-                  />
+          <div className="mb-12 border border-white/10 p-6 rounded-sm">
+            <div className="flex items-start gap-5">
+              <img
+                src={getLogoUrl(companyInfo.ticker)}
+                alt=""
+                className="w-14 h-14 object-contain opacity-90"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-baseline gap-3">
+                  <h2 className="text-lg font-light tracking-wide">{companyInfo.name}</h2>
+                  <span className="text-[10px] tracking-widest uppercase text-white/50">
+                    {companyInfo.ticker}
+                  </span>
                 </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-1">
-                    <h2 className="text-2xl font-semibold text-neutral-900">{companyInfo.name}</h2>
-                    <span className="px-2.5 py-1 bg-neutral-100 text-neutral-600 text-sm font-mono rounded-lg">
-                      {companyInfo.ticker}
-                    </span>
-                  </div>
-                  <p className="text-neutral-500">
-                    {companyInfo.sector} {companyInfo.industry && `· ${companyInfo.industry}`}
+                {(companyInfo.sector || companyInfo.industry) && (
+                  <p className="text-xs text-white/40 mt-2 font-light">
+                    {companyInfo.sector}
+                    {companyInfo.industry ? ` · ${companyInfo.industry}` : ''}
                   </p>
-                  {companyInfo.market_cap > 0 && (
-                    <p className="text-sm text-neutral-400 mt-1">
-                      Market Cap: <span className="text-neutral-600 font-medium">{formatMarketCap(companyInfo.market_cap)}</span>
-                    </p>
-                  )}
-                </div>
+                )}
+                {companyInfo.market_cap > 0 && (
+                  <p className="text-xs text-white/35 mt-1">
+                    Mkt cap {formatMarketCap(companyInfo.market_cap)}
+                  </p>
+                )}
               </div>
             </div>
 
             {priceData.length > 0 && (
-              <div className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-medium text-neutral-500">1-Year Performance</h3>
-                  <div className="flex items-center gap-4 text-sm">
-                    <span className="text-neutral-400">
-                      ${priceData[0]?.close.toFixed(2)}
-                    </span>
-                    <span className={`font-medium ${
-                      priceData[priceData.length - 1]?.close >= priceData[0]?.close 
-                        ? 'text-emerald-600' 
-                        : 'text-rose-600'
-                    }`}>
-                      {((priceData[priceData.length - 1]?.close - priceData[0]?.close) / priceData[0]?.close * 100).toFixed(2)}%
-                    </span>
-                    <span className="text-neutral-900 font-semibold">
-                      ${priceData[priceData.length - 1]?.close.toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-                <canvas
-                  ref={canvasRef}
-                  className="w-full"
-                  style={{ height: '200px' }}
-                />
+              <div className="mt-8 pt-8 border-t border-white/10">
+                <p className="text-[10px] uppercase tracking-[0.25em] text-white/40 mb-4">
+                  1Y price
+                </p>
+                <canvas ref={canvasRef} className="w-full" style={{ height: 160 }} />
               </div>
             )}
           </div>
         )}
 
-        {reportPath && (
-          <div className="card p-6 animate-scaleIn">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center">
-                  <svg className="w-6 h-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-neutral-900">Report Ready</h3>
-                  <p className="text-neutral-500">Your analysis is complete and ready to download</p>
-                </div>
-              </div>
-              <a
-                href={`${BACKEND_BASE}${reportPath}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-6 py-3 bg-blue-600 text-white rounded-xl font-medium 
-                         hover:bg-blue-700 transition-all duration-200 active:scale-[0.98]
-                         flex items-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                Download PDF
-              </a>
-            </div>
-          </div>
-        )}
-
-        {!isLoading && !reportPath && (
-          <div className="mt-16 animate-fadeIn stagger-3">
-            <h3 className="text-sm font-medium text-neutral-400 uppercase tracking-wider mb-4">Quick Start</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {[
-                { query: 'Apple', desc: 'Comprehensive analysis', tag: 'Popular' },
-                { query: 'TSLA - growth catalysts', desc: 'Focus on growth drivers', tag: 'Growth' },
-                { query: 'Microsoft - dividend analysis', desc: 'Income-focused report', tag: 'Income' },
-              ].map((example) => (
+        {versions.length > 0 && (
+          <div className="mb-10">
+            <p className="text-[10px] uppercase tracking-[0.25em] text-white/40 mb-3">
+              Versions
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {versions.map((v) => (
                 <button
-                  key={example.query}
-                  onClick={() => setQuery(example.query)}
-                  className="group text-left p-5 card card-hover"
+                  key={v.id}
+                  type="button"
+                  onClick={() => setSelectedVersionId(v.id)}
+                  className={`px-3 py-1.5 text-[10px] uppercase tracking-wider rounded-sm border transition-colors ${
+                    selectedVersionId === v.id
+                      ? 'bg-white text-black border-white'
+                      : 'border-white/25 text-white/60 hover:border-white/50'
+                  }`}
                 >
-                  <div className="flex items-start justify-between mb-2">
-                    <p className="font-medium text-neutral-900 group-hover:text-blue-600 transition-colors">
-                      {example.query}
-                    </p>
-                    <span className="px-2 py-0.5 text-xs font-medium bg-neutral-100 text-neutral-500 rounded-md">
-                      {example.tag}
-                    </span>
-                  </div>
-                  <p className="text-sm text-neutral-500">{example.desc}</p>
+                  v{v.version}
                 </button>
               ))}
             </div>
           </div>
         )}
+
+        {Object.keys(viewAnalysis).length > 0 && (
+          <div className="space-y-10 mb-12">
+            {sectionOrder.map(({ key, label }) => {
+              const text = viewAnalysis[key];
+              if (!text?.trim()) return null;
+              return (
+                <section key={key}>
+                  <h3 className="text-[10px] uppercase tracking-[0.3em] text-white/35 mb-3">
+                    {label}
+                  </h3>
+                  <div className="text-sm text-white/70 font-light leading-relaxed whitespace-pre-wrap">
+                    {text}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        )}
+
+        {reportPath && (
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border border-white/15 p-5 rounded-sm mb-12">
+            <p className="text-xs text-white/50 font-light">PDF ready</p>
+            <a
+              href={`${BACKEND_BASE}${reportPath}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-black bg-white px-5 py-3 rounded-sm hover:bg-white/90"
+            >
+              Download
+              <span aria-hidden>↗</span>
+            </a>
+          </div>
+        )}
+
+        {(selectedVersionId || reportId) && (
+          <div className="border border-white/10 p-5 rounded-sm">
+            <p className="text-[10px] uppercase tracking-[0.25em] text-white/40 mb-3">
+              Regenerate
+            </p>
+            <textarea
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              placeholder="What should change in the next version?"
+              rows={3}
+              className="w-full bg-white/[0.03] border border-white/10 px-3 py-2 text-sm text-white placeholder:text-white/25 outline-none font-light mb-3"
+            />
+            <button
+              type="button"
+              onClick={() => void handleFeedback()}
+              disabled={feedbackBusy || !feedback.trim()}
+              className="text-xs uppercase tracking-widest px-4 py-2 border border-white/30 rounded-sm hover:bg-white/5 disabled:opacity-30"
+            >
+              {feedbackBusy ? 'Working…' : 'Submit feedback'}
+            </button>
+          </div>
+        )}
       </main>
     </div>
+  );
+}
+
+export default function ResearchPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-black text-white flex items-center justify-center text-sm font-light">
+          Loading…
+        </div>
+      }
+    >
+      <ResearchPageInner />
+    </Suspense>
   );
 }
