@@ -2,16 +2,26 @@
 
 ## What It Is
 
-**Market Scout** is an AI-assisted stock research web application for self-directed investors. Given a plain-English company query (e.g. `"Apple - growth prospects"`), it:
+**Market Scout** is an AI-assisted stock research web application for self-directed investors. It accepts **natural language queries** about companies and produces comprehensive research reports.
 
-1. Resolves the company to a ticker via a lookup map, ticker pattern detection, or an OpenAI fallback
-2. Fetches financial data (via `yfinance`), recent news, and optionally SEC filings
-3. Runs an LLM pipeline (OpenAI GPT) to produce a structured multi-section research report
-4. Renders the report as a downloadable **PDF** (via ReportLab) and serves it over HTTP
-5. Persists reports to a **JSON file store** for browsing history ("Papers")
-6. Supports **portfolio tracking** with per-holding valuation, weight, and sector breakdown
-7. Injects **portfolio context** into reports when holdings exist so the report includes a "portfolio fit" section
-8. Allows **feedback-driven regeneration**: submitting feedback on an existing report triggers a new version
+### Query Examples
+- `"AAPL"` — simple ticker
+- `"Apple - focus on services revenue"` — company name with custom focus
+- `"What are the growth prospects for that electric car company"` — full natural language
+- `"the AI chip company leadership and compensation"` — descriptive reference with topic
+- `"is Microsoft a good investment"` — question format
+
+### Core Features
+
+1. **AI-powered query parsing** — extracts company reference and custom focus from natural language
+2. **Smart ticker resolution** — instant mappings for common names, pattern detection for tickers, OpenAI fallback for vague descriptions ("the iPhone maker" → AAPL)
+3. Fetches financial data (via `yfinance`), recent news, and optionally SEC filings
+4. Runs an LLM pipeline (OpenAI GPT) to produce a structured multi-section research report
+5. Renders the report as a downloadable **PDF** (via ReportLab) and serves it over HTTP
+6. Persists reports to **smoldb** (cloud-hosted JSON store) for browsing history ("Papers")
+7. Supports **portfolio tracking** with per-holding valuation, weight, and sector breakdown
+8. Injects **portfolio context** into reports when holdings exist so the report includes a "portfolio fit" section
+9. Allows **feedback-driven regeneration**: submitting feedback on an existing report triggers a new version
 
 **Live deployment:**
 - Frontend → [Vercel](https://market-scout-chi.vercel.app)
@@ -65,7 +75,7 @@ marketscout/
             ├── schemas/
             │   └── request_schemas.py  # Pydantic request/response models
             ├── utils/
-            │   ├── validation.py       # query parsing, ticker resolution
+            │   ├── validation.py       # AI-powered query parsing, ticker resolution
             │   ├── parser.py           # text/LLM response parsing helpers
             │   └── llm.py              # thin OpenAI wrapper (call_openai)
             ├── data/
@@ -74,10 +84,7 @@ marketscout/
             │   ├── fetch_filings.py    # SEC EDGAR (partial / unused in live path)
             │   └── scrape_tools.py     # BeautifulSoup helpers (unused in live path)
             ├── db/
-            │   ├── file_storage.py     # JSON file persistence (active)
-            │   ├── models.py           # SQLAlchemy ORM models (incomplete/dead)
-            │   ├── database.py         # SQLAlchemy engine setup (dead — missing setting)
-            │   └── crud.py             # SQLAlchemy CRUD ops (dead)
+            │   └── smoldb.py           # HTTP client for smoldb (hosted SQLite)
             ├── reports/
             │   └── generator.py        # ReportLab PDF builder
             ├── agents/
@@ -89,6 +96,8 @@ marketscout/
             │   ├── financial_agent.py  # (legacy — not used in live path)
             │   ├── news_agent.py       # (legacy — not used in live path)
             │   └── risk_agent.py       # (legacy — not used in live path)
+            ├── services/
+            │   └── research_service.py # orchestration + persistence + PDF pipeline
             └── routers/
                 ├── research_router.py
                 ├── papers_router.py
@@ -147,13 +156,23 @@ The backend loads from `.env` via `pydantic-settings`:
 ### Research Pipeline (`POST /api/research`)
 
 ```
-User query string
+User query string (natural language)
     │
     ▼
-parse_user_query()          ← extracts company + optional focus/omissions/sections
+parse_user_query()          ← AI-powered: extracts company_query + custom_request
+    │                         - Fast path: explicit separators (` - `, `: `)
+    │                         - Instant mappings: common names (apple → AAPL)
+    │                         - AI fallback: parses natural language queries
+    │                           e.g. "What are Tesla's growth prospects?" 
+    │                                → company_query: "Tesla"
+    │                                → custom_request: "growth prospects"
     │
     ▼
-resolve_company_to_ticker() ← map lookup → ticker pattern → OpenAI fallback
+resolve_company_to_ticker() ← resolves company_query to ticker
+    │                         - Instant mappings (50+ common names)
+    │                         - Ticker pattern detection (1-5 letters)
+    │                         - AI fallback for descriptions
+    │                           e.g. "that electric car company" → TSLA
     │
     ▼
 orchestrate_research()
@@ -164,11 +183,11 @@ orchestrate_research()
     │       ├─ tools.execute_tool("risk")           → yfinance + heuristics
     │       ├─ tools.execute_tool("news")           → Yahoo Finance scrape
     │       ├─ tools.execute_tool("other")          ← optional custom section
-    │       ├─ get_portfolio_context()              ← reads portfolio.json
+    │       ├─ get_portfolio_context()              ← reads portfolio from smoldb
     │       ├─ generate_analysis()                  ← single large GPT call
     │       └─ generate_news_reflections()          ← GPT: top headline takes
     │
-    ├─ persist to file_storage (query, report metadata, report_data)
+    ├─ persist to smoldb (query, report metadata, report_data)
     └─ generate_report() via ReportLab → PDF written to output/reports/
          └─ returns /reports/<filename>.pdf (served as StaticFiles)
 ```
@@ -230,20 +249,27 @@ CRUD over `portfolio.json`. The `/summary` endpoint enriches each holding with a
 
 ## Database / Persistence
 
-### Active: JSON File Storage (`file_storage.py`)
+### Active: smoldb (`db/smoldb.py`)
 
-All runtime data lives in JSON files under `backend/data/` (or `/tmp/data` when `VERCEL`/Lambda env detected):
+Data is persisted to **smoldb** (https://smoldb.fly.dev), a hosted SQLite-compatible database service accessed via HTTP. Configuration:
 
-| File | Contents |
+| Variable | Purpose |
 |---|---|
-| `queries.json` | `{ id (UUID), request, company, created_at }` |
-| `reports.json` | `{ id (UUID), query_id, company, report_path, version, created_at }` |
-| `report_data.json` | Raw agent payloads keyed by report ID |
-| `portfolio.json` | Holding records `{ ticker, shares, purchase_price, added_at }` |
+| `SMOLDB_KEY` | API key for authentication |
+| `SMOLDB_URL` | Endpoint URL (defaults to https://smoldb.fly.dev) |
 
-### Inactive: SQLAlchemy ORM (`models.py`, `database.py`, `crud.py`)
+**Tables:**
 
-Full ORM layer exists but is **never imported or initialized** in `main.py`. `database.py` references `settings.database_url` which is not defined in `Settings`. The ORM models mirror the JSON schema:
+| Table | Schema |
+|---|---|
+| `queries` | `id (UUID), request, company, ticker, created_at` |
+| `reports` | `id (UUID), query_id, company, ticker, report_path, version, created_at` |
+| `report_data` | `report_id, company_info, financial_data, risk_data, news_data, analysis` |
+| `portfolio` | `ticker (PK), shares, purchase_price, company_name, holding_id, created_at, updated_at` |
+
+### Legacy: SQLAlchemy ORM (`models.py`, `database.py`, `crud.py`)
+
+Full ORM layer exists but is **no longer used** — replaced by smoldb. The ORM models mirror the old JSON schema:
 
 - `Query` (1-to-many) → `Report` (1-to-1) → `ReportData`
 
@@ -302,10 +328,10 @@ Entry point for research. Calls `parse_user_query` → `resolve_company_to_ticke
 ### `master_agent.py`
 Core logic controller:
 1. Dispatches tool calls (company info, financials, risk, news, optional custom)
-2. Loads portfolio context from `portfolio.json`
+2. Loads portfolio context from smoldb
 3. Calls `generate_analysis()` — a single large GPT prompt that produces all narrative sections
 4. Calls `generate_news_reflections()` — GPT produces short takes on top headlines
-5. Detects custom section topics via `detect_custom_section_topic()` — has a bug where an unmatched long string returns a `list` instead of a `str`
+5. Detects custom section topics via `detect_custom_section_topic()` for dedicated sections on leadership, ESG, M&A, etc.
 
 ### `tools.py`
 Executes the four standard data-gathering tools by calling the `data/` fetchers, formats their output for the LLM prompt.
@@ -336,20 +362,22 @@ Files are written to `backend/output/reports/` and served as static files at `/r
 
 ## Known Bugs and Inconsistencies
 
-| # | Location | Issue |
-|---|---|---|
-| 1 | `research_router.py` | `get_research_status` path param typed as `int`; all IDs are UUID strings |
-| 2 | `master_agent.py` | `detect_custom_section_topic`: long unmatched text returns `list` not `str` |
-| 3 | `lib/api.ts` | Routes `/papers/companies`, `/papers/download/:id` do not exist on backend |
-| 4 | `lib/api.ts` | `report_id` typed `number`; backend uses UUID `str` |
-| 5 | `database.py` | References `settings.database_url`; not in `Settings` class |
-| 6 | `main.py` | SQLAlchemy `init_db()` never called; ORM layer entirely dead |
-| 7 | `FeedbackForm.tsx` | Field names don't match `FeedbackRequest` schema |
-| 8 | `ReportCard.tsx` | Calls `/api/papers/download/{id}` — endpoint doesn't exist |
-| 9 | `main.py` | `allow_origins=["*"]` + `allow_credentials=True` — browsers reject credentialed wildcard CORS |
-| 10 | `backend/backend/data/` | Nested duplicate data directory; runtime path is `backend/data/` |
-| 11 | `research_router.py` | `omit_sections` / `add_sections` parsed in validation but **not passed** through `orchestrate_research` to the master agent |
-| 12 | `papers_router.py` | Company lookup uses substring match; frontend passes just a ticker, backend stores `"Name (TICKER)"` strings — match is fragile |
+| # | Location | Issue | Status |
+|---|---|---|---|
+| 1 | `lib/api.ts` | Routes `/papers/companies`, `/papers/download/:id` do not exist on backend | Open |
+| 2 | `FeedbackForm.tsx` | Field names don't match `FeedbackRequest` schema | Open |
+| 3 | `ReportCard.tsx` | Calls `/api/papers/download/{id}` — endpoint doesn't exist | Open |
+| 4 | `database.py` | References `settings.database_url`; legacy ORM layer (replaced by smoldb) | N/A (dead code) |
+| 5 | `main.py` | `allow_origins=["*"]` + `allow_credentials=True` — browsers reject credentialed wildcard CORS | Open |
+
+### Recently Fixed
+
+| Issue | Resolution |
+|---|---|
+| Natural language queries not working | Added AI-powered `parse_user_query()` that extracts company references and custom requests from any query format |
+| Vague company descriptions failing | Enhanced `resolve_company_to_ticker()` with expanded instant mappings and improved AI fallback |
+| `omit_sections`/`add_sections` not passed to agent | Fixed in `orchestrator.py` — now properly merged and passed through |
+| `report_id` type mismatch | Fixed in `research_router.py` — changed from `int` to `str` |
 
 ---
 
@@ -360,6 +388,14 @@ Files are written to `backend/output/reports/` and served as static files at `/r
 | **Frontend hosting** | Vercel (auto-deployed from `frontend/` via `vercel.json`) |
 | **Backend hosting** | Render (primary), Railway config also present |
 | **PDF storage** | Local disk on Render (`output/reports/`) — ephemeral, lost on redeploy |
-| **Data storage** | Local JSON files on Render — same ephemeral problem |
-| **API secrets** | `OPENAI_API_KEY` in Render environment |
+| **Data storage** | **smoldb** (https://smoldb.fly.dev) — persistent SQLite-over-HTTP |
+| **API secrets** | `OPENAI_API_KEY`, `SMOLDB_KEY` in Render environment |
 | **Dev workflow** | `npm run dev` at repo root runs `concurrently` for both Next.js and uvicorn |
+
+### Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `OPENAI_API_KEY` | All LLM calls (parsing, analysis, ticker resolution) |
+| `SMOLDB_KEY` | Authentication for smoldb database |
+| `SMOLDB_URL` | Optional: smoldb endpoint (defaults to https://smoldb.fly.dev) |
