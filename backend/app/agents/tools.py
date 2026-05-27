@@ -1,7 +1,9 @@
-import yfinance as yf
+import asyncio
 import os
-from typing import Dict, Any, List
 from datetime import datetime, timedelta
+from typing import Any, Dict, List
+
+import yfinance as yf
 
 
 def get_company_info(ticker: str) -> Dict[str, Any]:
@@ -311,91 +313,104 @@ TOOL_DEFINITIONS = [
 ]
 
 
-def _normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    return {str(k).lower(): v for k, v in row.items()}
+async def get_portfolio_context() -> Dict[str, Any]:
+    """Async portfolio context using the Postgres repository.
+    Fetches yfinance financials concurrently per holding via to_thread."""
+    from app.db.database import session_scope
+    from app.db.repositories import portfolio as portfolio_repo
 
-
-def get_portfolio_context() -> Dict[str, Any]:
-    """Get current portfolio holdings with enriched data for analysis"""
     try:
-        from app.db import smoldb
-
-        smoldb.ensure_schema()
-        rows = smoldb.portfolio_list_all()
+        async with session_scope() as session:
+            holdings = await portfolio_repo.list_all(session)
     except Exception:
         return {"holdings": [], "total_value": 0, "sectors": {}}
 
-    holdings = []
-    for r in rows:
-        nr = _normalize_row(r)
-        holdings.append(
-            {
-                "id": nr.get("holding_id") or nr.get("ticker"),
-                "ticker": nr.get("ticker", ""),
-                "shares": float(nr.get("shares") or 0),
-                "company_name": nr.get("company_name") or nr.get("ticker", ""),
-                "created_at": nr.get("created_at", ""),
-                "updated_at": nr.get("updated_at", ""),
-            }
-        )
-
     if not holdings:
         return {"holdings": [], "total_value": 0, "sectors": {}}
-    
-    enriched = []
-    total_value = 0
-    sectors = {}
-    
-    for h in holdings:
-        try:
-            financials = get_financials(h["ticker"])
-            current_price = financials.get("current_price", 0) or 0
-            value = current_price * h["shares"]
-            total_value += value
-            
-            sector = financials.get("sector", "Unknown")
-            if sector not in sectors:
-                sectors[sector] = {"value": 0, "tickers": []}
-            sectors[sector]["value"] += value
-            sectors[sector]["tickers"].append(h["ticker"])
-            
-            enriched.append({
-                "ticker": h["ticker"],
-                "shares": h["shares"],
-                "company_name": h.get("company_name", h["ticker"]),
-                "current_price": current_price,
-                "value": value,
-                "sector": sector,
-                "pe_ratio": financials.get("pe_ratio"),
-                "dividend_yield": financials.get("dividend_yield"),
-                "beta": financials.get("beta"),
-            })
-        except:
+
+    fin_results = await asyncio.gather(
+        *(asyncio.to_thread(get_financials, h["ticker"]) for h in holdings),
+        return_exceptions=True,
+    )
+
+    enriched: List[Dict[str, Any]] = []
+    sectors: Dict[str, Dict[str, Any]] = {}
+    total_value = 0.0
+
+    for h, fin in zip(holdings, fin_results):
+        if isinstance(fin, Exception) or not isinstance(fin, dict):
             enriched.append({
                 "ticker": h["ticker"],
                 "shares": h["shares"],
                 "company_name": h.get("company_name", h["ticker"]),
                 "current_price": 0,
                 "value": 0,
-                "sector": "Unknown"
+                "sector": "Unknown",
             })
-    
+            continue
+
+        current_price = fin.get("current_price") or 0
+        value = float(current_price) * float(h["shares"])
+        total_value += value
+        sector = fin.get("sector", "Unknown") or "Unknown"
+        bucket = sectors.setdefault(sector, {"value": 0.0, "tickers": []})
+        bucket["value"] += value
+        bucket["tickers"].append(h["ticker"])
+
+        enriched.append({
+            "ticker": h["ticker"],
+            "shares": h["shares"],
+            "company_name": h.get("company_name", h["ticker"]),
+            "current_price": current_price,
+            "value": value,
+            "sector": sector,
+            "pe_ratio": fin.get("pe_ratio"),
+            "dividend_yield": fin.get("dividend_yield"),
+            "beta": fin.get("beta"),
+        })
+
     for h in enriched:
         h["weight"] = (h["value"] / total_value * 100) if total_value > 0 else 0
-    
-    for sector in sectors:
-        sectors[sector]["weight"] = (sectors[sector]["value"] / total_value * 100) if total_value > 0 else 0
-    
+    for sector in sectors.values():
+        sector["weight"] = (sector["value"] / total_value * 100) if total_value > 0 else 0
+
     return {
         "holdings": enriched,
         "total_value": total_value,
         "total_holdings": len(enriched),
-        "sectors": sectors
+        "sectors": sectors,
     }
 
 
+# --- Async wrappers — yfinance is blocking, run via to_thread ---
+
+
+async def aget_company_info(ticker: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(get_company_info, ticker)
+
+
+async def aget_financials(ticker: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(get_financials, ticker)
+
+
+async def aget_risks(ticker: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(get_risks, ticker)
+
+
+async def aget_news(ticker: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(get_news, ticker)
+
+
+async def aget_price_history(ticker: str, period: str = "1y") -> Dict[str, Any]:
+    return await asyncio.to_thread(get_price_history, ticker, period)
+
+
+async def aget_other(ticker: str, custom_request: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(get_other, ticker, custom_request)
+
+
 def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute a tool by name"""
+    """Execute a tool by name (sync; portfolio_context is async-only now)."""
     tools = {
         "get_company_info": get_company_info,
         "get_financials": get_financials,
@@ -403,10 +418,9 @@ def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         "get_news": get_news,
         "get_price_history": get_price_history,
         "get_other": get_other,
-        "get_portfolio_context": get_portfolio_context,
     }
-    
+
     if tool_name not in tools:
         return {"error": f"Unknown tool: {tool_name}"}
-    
+
     return tools[tool_name](**arguments)

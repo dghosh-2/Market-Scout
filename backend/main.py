@@ -1,5 +1,5 @@
-import os
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -9,26 +9,30 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 
-from app.routers import research_router, papers_router, feedback_router, portfolio_router
+from app.cache.redis_client import close_redis
+from app.db.database import dispose_engine, get_engine
 from app.limiter import limiter
+from app.routers import feedback_router, papers_router, portfolio_router, research_router
+from app.telemetry.langfuse_client import init_langfuse, shutdown_langfuse
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_langfuse()
     try:
-        from app.db import smoldb
-
-        smoldb.init_schema()
-        logger.info("smoldb schema initialized")
+        get_engine()
+        logger.info("SQLAlchemy async engine ready")
     except Exception as e:
-        logger.warning("smoldb init skipped or failed (set SMOLDB_KEY): %s", e)
+        logger.warning("DB engine init deferred (set DATABASE_URL): %s", e)
     yield
+    await dispose_engine()
+    await close_redis()
+    await shutdown_langfuse()
 
 
-app = FastAPI(title="Stock Research API", version="1.0.0", lifespan=lifespan)
-
+app = FastAPI(title="Stock Research API", version="2.0.0", lifespan=lifespan)
 app.state.limiter = limiter
 
 
@@ -53,19 +57,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Get the directory where main.py is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORTS_DIR = os.path.join(BASE_DIR, "output", "reports")
 DATA_DIR = os.path.join(BASE_DIR, "data")
-
-# Ensure directories exist
 os.makedirs(REPORTS_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Mount static files for reports
 app.mount("/reports", StaticFiles(directory=REPORTS_DIR), name="reports")
 
-# Include routers
 app.include_router(research_router.router, prefix="/api", tags=["research"])
 app.include_router(papers_router.router, prefix="/api", tags=["papers"])
 app.include_router(feedback_router.router, prefix="/api", tags=["feedback"])

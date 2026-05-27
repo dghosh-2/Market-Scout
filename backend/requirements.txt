@@ -10,3 +10,25 @@ beautifulsoup4
 requests
 python-multipart
 reportlab
+
+# Async DB + pgvector
+sqlalchemy[asyncio]>=2.0
+asyncpg
+pgvector
+greenlet
+
+# Redis semantic cache
+redis[hiredis]>=5.0
+numpy
+
+# LangGraph agent DAG
+langgraph>=0.2
+langchain-core>=0.3
+
+# Langfuse tracing
+langfuse>=2.0
+
+# Tests
+pytest
+pytest-asyncio
+pytest-mock
